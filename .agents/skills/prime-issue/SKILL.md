@@ -17,8 +17,9 @@ Prime the issue, then stop. Do not implement, edit product code, or write tests 
 3. **Read the parent context.** Read the PRD, parent issue, linked design doc, or epic referenced by the issue. If none is referenced, state that none was found. Completion criterion: every parent reference in the issue has been read or is listed as inaccessible.
 4. **Load project context.** Read `CONTEXT.md` and the ADRs that govern the area named by the issue or parent context. Completion criterion: the plan uses project vocabulary and lists every ADR that constrains the work, or states that no relevant ADR was found.
 5. **Explore the codebase.** Search for relevant public interfaces, tests, domain models, endpoints, commands, and package boundaries. Prefer `Glob`, `Grep`, and targeted reads. Completion criterion: the relevant existing files and contracts are mapped well enough to place the first red test.
-6. **Load `/tdd`.** Apply its red-green-refactor guidance while planning. Completion criterion: each phase below is one vertical red-green-refactor cycle, not a horizontal batch of tests followed by implementation.
-7. **Propose the plan and stop.** Present a multi-phase plan and ask for approval before implementation. Completion criterion: the user can approve, reject, or reorder phases without needing implementation detail.
+6. **Explore submodule knowledge.** Read `.gitmodules` and inspect `.agents/` for downloaded git submodules. For each submodule relevant by dependency, import, architecture, or issue domain, launch a subagent to search that submodule for patterns, examples, docs, and constraints that should shape the plan. Completion criterion: every relevant `.agents/<submodule>` has either a returned subagent summary with cited files or is listed as intentionally skipped with the reason.
+7. **Load `/tdd`.** Apply its red-green-refactor guidance while planning. Completion criterion: each phase below is one vertical red-green-refactor cycle, not a horizontal batch of tests followed by implementation.
+8. **Propose the plan and stop.** Present a multi-phase plan and ask for approval before implementation. Completion criterion: the user can approve, reject, or reorder phases without needing implementation detail.
 
 ## Plan Format
 
@@ -41,6 +42,7 @@ Use this shape:
 
 - Existing tests: <files>
 - Existing contracts: <public APIs, commands, endpoints, schemas, storage, events>
+- Submodule knowledge: <relevant `.agents/<submodule>` patterns, examples, docs, or none found>
 - Likely touchpoints: <files or directories>
 
 ## Phases
@@ -72,3 +74,4 @@ Use this shape:
 - Keep GREEN high level: describe the capability needed to pass, not how to build it.
 - If the issue is too large, split the plan into the smallest approval-worthy vertical slices.
 - If a blocker prevents branch creation or parent-context reading, stop and ask one concrete question.
+- Do not edit files inside `.agents/` submodules while priming; use them as read-only reference material.
