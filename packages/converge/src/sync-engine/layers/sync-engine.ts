@@ -150,18 +150,30 @@ export const SyncEngineLayer = Layer.effect(
 
         yield* Ref.update(eventHistory, (events) => [...events, accepted]);
 
+        return accepted;
+      });
+
+    const sync: SyncEngine["Service"]["sync"] = () =>
+      Effect.gen(function* () {
+        const history = yield* Ref.get(eventHistory);
         const projections = yield* Ref.get(projectionRegistry);
-        yield* Ref.update(acceptedState, (state) =>
-          applyProjection(state, projections, proposed.event, proposed.payload),
-        );
+
+        let accepted: Record<string, unknown> = {};
+        for (const [, projection] of projections) {
+          accepted[projection.name] = projection.initial;
+        }
+
+        for (const event of history) {
+          accepted = applyProjection(accepted, projections, event.event, event.payload);
+        }
+
+        yield* Ref.set(acceptedState, accepted);
 
         yield* Ref.update(unresolvedEvents, (events) =>
-          events.filter((event) => event.eventId !== proposed.eventId),
+          events.filter((proposed) => !history.some((accepted) => accepted.eventId === proposed.eventId)),
         );
 
         yield* rebuildOptimisticProjections;
-
-        return accepted;
       });
 
     const getEventHistory: SyncEngine["Service"]["getEventHistory"] = () => Ref.get(eventHistory);
@@ -179,6 +191,7 @@ export const SyncEngineLayer = Layer.effect(
       registerProjection,
       record,
       accept,
+      sync,
       getEventHistory,
       getProjections,
     });

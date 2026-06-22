@@ -54,6 +54,7 @@ export class SyncEngine extends Context.Service<SyncEngine, {
   readonly accept: (
     proposed: ProposedEvent,
   ) => Effect.Effect<AcceptedEvent, ProcessorNotRegisteredError | unknown>;
+  readonly sync: () => Effect.Effect<void>;
   readonly getEventHistory: () => Effect.Effect<Array<AcceptedEvent>>;
   readonly getProjections: () => Effect.Effect<ProjectionsSnapshot>;
 }>()("converge/SyncEngine") {}
