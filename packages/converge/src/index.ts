@@ -9,6 +9,7 @@ export {
   SyncEngine,
   SyncEngineLayer,
   ProcessorNotRegisteredError,
+  type AcceptedEvent,
   type ProcessorInput,
   type ProposedEvent,
   type ProposedEventProcessor,

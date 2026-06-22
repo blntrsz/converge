@@ -5,11 +5,32 @@ import { ProcessorRegistry } from "../../processor-registry.ts";
 import {
   ProcessorNotRegisteredError,
   SyncEngine,
+  type AcceptedEvent,
   type ProcessorInput,
   type ProposedEvent,
   type ProposedEventProcessor,
   type ProjectionsSnapshot,
 } from "../services/sync-engine.ts";
+
+const applyProjection = (
+  state: Record<string, unknown>,
+  projections: HashMap.HashMap<Event<string, unknown>, Projection<unknown, unknown>>,
+  event: Event<string, unknown>,
+  payload: unknown,
+): Record<string, unknown> => {
+  const maybeProjection = HashMap.get(projections, event);
+  if (Option.isNone(maybeProjection)) {
+    return state;
+  }
+
+  const projection = maybeProjection.value;
+  const current = projection.name in state ? state[projection.name] : projection.initial;
+
+  return {
+    ...state,
+    [projection.name]: projection.apply(current, payload),
+  };
+};
 
 export const SyncEngineLayer = Layer.effect(
   SyncEngine,
@@ -22,6 +43,7 @@ export const SyncEngineLayer = Layer.effect(
       HashMap.empty<Event<string, unknown>, Projection<unknown, unknown>>(),
     );
     const unresolvedEvents = yield* Ref.make<Array<ProposedEvent>>([]);
+    const eventHistory = yield* Ref.make<Array<AcceptedEvent>>([]);
     const nextEventId = yield* Ref.make(0);
 
     const rebuildOptimisticProjections = Effect.gen(function* () {
@@ -29,7 +51,7 @@ export const SyncEngineLayer = Layer.effect(
       const projections = yield* Ref.get(projectionRegistry);
       const unresolved = yield* Ref.get(unresolvedEvents);
 
-      const optimistic: Record<string, unknown> = { ...accepted };
+      let optimistic: Record<string, unknown> = { ...accepted };
 
       for (const [, projection] of projections) {
         if (!(projection.name in optimistic)) {
@@ -38,14 +60,7 @@ export const SyncEngineLayer = Layer.effect(
       }
 
       for (const proposed of unresolved) {
-        const maybeProjection = HashMap.get(projections, proposed.event);
-        if (Option.isSome(maybeProjection)) {
-          const projection = maybeProjection.value;
-          optimistic[projection.name] = projection.apply(
-            optimistic[projection.name],
-            proposed.payload,
-          );
-        }
+        optimistic = applyProjection(optimistic, projections, proposed.event, proposed.payload);
       }
 
       yield* Ref.set(optimisticState, optimistic);
@@ -91,7 +106,8 @@ export const SyncEngineLayer = Layer.effect(
     const record: SyncEngine["Service"]["record"] = (event, payload) =>
       Effect.gen(function* () {
         const eventId = `event-${yield* Ref.getAndUpdate(nextEventId, (n) => n + 1)}`;
-        const tailEventId = undefined;
+        const history = yield* Ref.get(eventHistory);
+        const tailEventId = history.at(-1)?.eventId;
 
         const proposed: ProposedEvent = {
           eventId,
@@ -106,6 +122,50 @@ export const SyncEngineLayer = Layer.effect(
         return proposed;
       });
 
+    const accept: SyncEngine["Service"]["accept"] = (proposed) =>
+      Effect.gen(function* () {
+        const maybeProcessor = yield* registry.lookup(proposed.event);
+
+        if (Option.isNone(maybeProcessor)) {
+          return yield* new ProcessorNotRegisteredError({ version: proposed.event.version });
+        }
+
+        const processor = maybeProcessor.value as ProposedEventProcessor<
+          unknown,
+          unknown,
+          unknown
+        >;
+
+        yield* processor({ payload: proposed.payload });
+
+        const history = yield* Ref.get(eventHistory);
+        const previousEventId = history.at(-1)?.eventId;
+
+        const accepted: AcceptedEvent = {
+          eventId: proposed.eventId,
+          previousEventId,
+          event: proposed.event,
+          payload: proposed.payload,
+        };
+
+        yield* Ref.update(eventHistory, (events) => [...events, accepted]);
+
+        const projections = yield* Ref.get(projectionRegistry);
+        yield* Ref.update(acceptedState, (state) =>
+          applyProjection(state, projections, proposed.event, proposed.payload),
+        );
+
+        yield* Ref.update(unresolvedEvents, (events) =>
+          events.filter((event) => event.eventId !== proposed.eventId),
+        );
+
+        yield* rebuildOptimisticProjections;
+
+        return accepted;
+      });
+
+    const getEventHistory: SyncEngine["Service"]["getEventHistory"] = () => Ref.get(eventHistory);
+
     const getProjections: SyncEngine["Service"]["getProjections"] = () =>
       Effect.gen(function* () {
         const accepted = yield* Ref.get(acceptedState);
@@ -118,6 +178,8 @@ export const SyncEngineLayer = Layer.effect(
       process,
       registerProjection,
       record,
+      accept,
+      getEventHistory,
       getProjections,
     });
   }),

@@ -22,6 +22,13 @@ export class ProcessorNotRegisteredError extends Schema.TaggedErrorClass<Process
   { version: Schema.String },
 ) {}
 
+export interface AcceptedEvent {
+  readonly eventId: string;
+  readonly previousEventId: string | undefined;
+  readonly event: Event<string, unknown>;
+  readonly payload: unknown;
+}
+
 export interface ProjectionsSnapshot {
   readonly accepted: Record<string, unknown>;
   readonly optimistic: Record<string, unknown>;
@@ -44,5 +51,9 @@ export class SyncEngine extends Context.Service<SyncEngine, {
     event: Event<Version, Payload>,
     payload: Payload,
   ) => Effect.Effect<ProposedEvent>;
+  readonly accept: (
+    proposed: ProposedEvent,
+  ) => Effect.Effect<AcceptedEvent, ProcessorNotRegisteredError | unknown>;
+  readonly getEventHistory: () => Effect.Effect<Array<AcceptedEvent>>;
   readonly getProjections: () => Effect.Effect<ProjectionsSnapshot>;
 }>()("converge/SyncEngine") {}

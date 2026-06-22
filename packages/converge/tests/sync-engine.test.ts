@@ -57,3 +57,51 @@ it.effect("recording a Proposed Event updates the Optimistic Projection but not 
     assert.strictEqual(after.optimistic.counter as number, 5);
   }).pipe(Effect.provide(SyncEngineLayer)),
 );
+
+it.effect("accepting a Proposed Event appends it to Event History with a Previous Event ID", () =>
+  Effect.gen(function* () {
+    const CounterIncremented = Event.make("counter.incremented.v1", {
+      amount: Schema.Number,
+    });
+
+    const Counter = Projection.make(
+      "counter",
+      0,
+      (state, payload: { amount: number }) => state + payload.amount,
+    );
+
+    const engine = yield* SyncEngine;
+
+    yield* engine.register(CounterIncremented, ({ payload }) =>
+      Effect.sync(() => ({ newValue: payload.amount })),
+    );
+
+    yield* engine.registerProjection(CounterIncremented, Counter);
+
+    const first = yield* engine.record(CounterIncremented, { amount: 5 });
+    assert.strictEqual(first.tailEventId, undefined);
+
+    const acceptedFirst = yield* engine.accept(first);
+    assert.strictEqual(acceptedFirst.eventId, first.eventId);
+    assert.strictEqual(acceptedFirst.previousEventId, undefined);
+
+    const second = yield* engine.record(CounterIncremented, { amount: 3 });
+    assert.strictEqual(second.tailEventId, first.eventId);
+
+    const acceptedSecond = yield* engine.accept(second);
+
+    assert.strictEqual(acceptedSecond.eventId, second.eventId);
+    assert.strictEqual(acceptedSecond.previousEventId, first.eventId);
+
+    const history = yield* engine.getEventHistory();
+    assert.strictEqual(history.length, 2);
+    assert.strictEqual(history[0]!.eventId, first.eventId);
+    assert.strictEqual(history[0]!.previousEventId, undefined);
+    assert.strictEqual(history[1]!.eventId, second.eventId);
+    assert.strictEqual(history[1]!.previousEventId, first.eventId);
+
+    const projections = yield* engine.getProjections();
+    assert.strictEqual(projections.accepted.counter as number, 8);
+    assert.strictEqual(projections.optimistic.counter as number, 8);
+  }).pipe(Effect.provide(SyncEngineLayer)),
+);

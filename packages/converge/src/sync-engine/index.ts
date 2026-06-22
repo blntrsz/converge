@@ -1,6 +1,7 @@
 export {
   SyncEngine,
   ProcessorNotRegisteredError,
+  type AcceptedEvent,
   type ProcessorInput,
   type ProposedEvent,
   type ProposedEventProcessor,
