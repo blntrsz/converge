@@ -7,9 +7,10 @@ export {
 } from "./processor-registry.ts";
 export {
   SyncEngine,
+  SyncEngineLayer,
   ProcessorNotRegisteredError,
   type ProcessorInput,
-  type ProposedEventProcessor,
   type ProposedEvent,
+  type ProposedEventProcessor,
   type ProjectionsSnapshot,
-} from "./sync-engine.ts";
+} from "./sync-engine/index.ts";

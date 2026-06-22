@@ -1,6 +1,6 @@
 import { Context, Effect, HashMap, Layer, Option, Ref } from "effect";
 import type { Event } from "./event.ts";
-import type { ProposedEventProcessor } from "./sync-engine.ts";
+import type { ProposedEventProcessor } from "./sync-engine/services/sync-engine.ts";
 
 export type AnyProcessor = ProposedEventProcessor<unknown, unknown, unknown>;
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Ref, Schema } from "effect";
-import { Event, Projection, SyncEngine } from "../src/index.ts";
+import { Event, Projection, SyncEngine, SyncEngineLayer } from "../src/index.ts";
 
 describe("sync engine", () => {
   test("a test app can define an Event type and register a Proposed Event Processor", async () => {
@@ -22,7 +22,7 @@ describe("sync engine", () => {
       yield* engine.process(TodoCreated, { payload: { name: "Buy milk" } });
 
       return yield* Ref.get(captured);
-    }).pipe(Effect.provide(SyncEngine.layer));
+    }).pipe(Effect.provide(SyncEngineLayer));
 
     const value = await Effect.runPromise(program);
     expect(value).toBe("Buy milk");
@@ -58,7 +58,7 @@ describe("sync engine", () => {
       const after = yield* engine.getProjections();
       expect(after.accepted.counter).toBe(0);
       expect(after.optimistic.counter).toBe(5);
-    }).pipe(Effect.provide(SyncEngine.layer));
+    }).pipe(Effect.provide(SyncEngineLayer));
 
     await Effect.runPromise(program);
   });
