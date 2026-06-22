@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Ref, Schema } from "effect";
-import { Event, SyncEngine } from "../src/index.ts";
+import { Event, Projection, SyncEngine } from "../src/index.ts";
 
 describe("sync engine", () => {
   test("a test app can define an Event type and register a Proposed Event Processor", async () => {
@@ -26,5 +26,40 @@ describe("sync engine", () => {
 
     const value = await Effect.runPromise(program);
     expect(value).toBe("Buy milk");
+  });
+
+  test("recording a Proposed Event updates the Optimistic Projection but not the Accepted Projection", async () => {
+    const CounterIncremented = Event.make("counter.incremented.v1", {
+      amount: Schema.Number,
+    });
+
+    const Counter = Projection.make(
+      "counter",
+      0,
+      (state, payload: { amount: number }) => state + payload.amount,
+    );
+
+    const program = Effect.gen(function* () {
+      const engine = yield* SyncEngine;
+
+      yield* engine.register(CounterIncremented, ({ payload }) =>
+        Effect.sync(() => ({ newValue: payload.amount })),
+      );
+
+      yield* engine.registerProjection(CounterIncremented, Counter);
+
+      const before = yield* engine.getProjections();
+      expect(before.accepted.counter).toBe(0);
+      expect(before.optimistic.counter).toBe(0);
+
+      const proposed = yield* engine.record(CounterIncremented, { amount: 5 });
+      expect(proposed.eventId).toMatch(/^event-\d+$/);
+
+      const after = yield* engine.getProjections();
+      expect(after.accepted.counter).toBe(0);
+      expect(after.optimistic.counter).toBe(5);
+    }).pipe(Effect.provide(SyncEngine.layer));
+
+    await Effect.runPromise(program);
   });
 });
