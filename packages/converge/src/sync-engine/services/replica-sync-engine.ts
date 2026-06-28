@@ -1,4 +1,4 @@
-import { Context, Result, type Effect } from "effect";
+import { Context, type Effect } from "effect";
 import type { EventInstance } from "../../event";
 
 /**
@@ -7,14 +7,24 @@ import type { EventInstance } from "../../event";
  */
 export interface IReplicaSyncEngine {
   /**
+   * Runs the local event handler optimistically and enqueues a remote forward.
+   *
+   * Returns once the optimistic projection update is complete. The remote
+   * verdict and the local `event_history` append happen in a background
+   * consumer.
+   *
    * @since 0.0.0
    * @category service-method-interface
    */
-  push(
-    ...events: EventInstance.EventInstance[]
-  ): Effect.Effect<Result.Result<EventInstance.EventInstance, EventInstance.EventInstance>[]>;
+  push(...events: EventInstance.EventInstance[]): Effect.Effect<void>;
 
   /**
+   * Enqueues a reconcile task that pulls accepted events from the primary and
+   * applies them to the local projection.
+   *
+   * Returns immediately. The pull and local apply happen in a background
+   * consumer.
+   *
    * @since 0.0.0
    * @category service-method-interface
    */
