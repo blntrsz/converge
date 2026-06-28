@@ -27,6 +27,12 @@ const todoDeleted = Event.make("todo.deleted.v1", {
   name: Schema.String,
 });
 
+const todoRetryCounted = Event.make("todo.retry-counted.v1", {
+  id: Schema.String,
+});
+
+let todoRetryCountedHandlerRuns = 0;
+
 const todoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
@@ -55,6 +61,15 @@ const todoDeletedHandler = EventHandler.make(
   }),
 );
 
+const todoRetryCountedHandler = EventHandler.make(
+  todoRetryCounted,
+  Effect.fn(function* () {
+    yield* Effect.sync(() => {
+      todoRetryCountedHandlerRuns += 1;
+    });
+  }),
+);
+
 const migrations = Migrator.fromRecord({
   "2_create_todo": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -79,7 +94,12 @@ const PgSqlClientWithAllMigrations = migrationsLayer.pipe(
 );
 
 const EventRouterLayer = EventRouter.layer({
-  handlers: [todoCreatedHandler, todoUpdatedHandler, todoDeletedHandler],
+  handlers: [
+    todoCreatedHandler,
+    todoUpdatedHandler,
+    todoDeletedHandler,
+    todoRetryCountedHandler,
+  ],
 });
 
 const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
@@ -98,7 +118,7 @@ layer(PrimarySyncEngineLayer)((it) => {
         name: "Buy milk",
       });
 
-      const results = yield* engine.push([eventInstance]);
+      const results = yield* engine.push(eventInstance);
 
       assert.strictEqual(results.length, 1);
       const result = results[0]!;
@@ -123,6 +143,68 @@ layer(PrimarySyncEngineLayer)((it) => {
         id: "1",
         name: "Buy milk",
       });
+    }),
+  );
+
+  it.effect("treats retrying an accepted Event as idempotent", () =>
+    Effect.gen(function* () {
+      const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+      todoRetryCountedHandlerRuns = 0;
+
+      const eventInstance = yield* EventInstance.make(todoRetryCounted, {
+        id: "retry-1",
+      });
+
+      const firstResults = yield* engine.push(eventInstance);
+
+      assert.strictEqual(firstResults.length, 1);
+      const firstResult = firstResults[0]!;
+      if (!Result.isSuccess(firstResult)) {
+        assert.fail("expected first Push to accept the Event");
+      }
+      assert.strictEqual(firstResult.success.eventId, eventInstance.eventId);
+      assert.strictEqual(todoRetryCountedHandlerRuns, 1);
+
+      const retryResults = yield* engine.push(eventInstance);
+
+      assert.strictEqual(retryResults.length, 1);
+      const retryResult = retryResults[0]!;
+      if (!Result.isSuccess(retryResult)) {
+        assert.fail("expected retrying an accepted Event to succeed");
+      }
+      assert.strictEqual(retryResult.success.eventId, eventInstance.eventId);
+      assert.strictEqual(todoRetryCountedHandlerRuns, 1);
+    }),
+  );
+
+  it.effect("pushes multiple Events passed as arguments", () =>
+    Effect.gen(function* () {
+      const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+      todoRetryCountedHandlerRuns = 0;
+
+      const firstEvent = yield* EventInstance.make(todoRetryCounted, {
+        id: "multi-1",
+      });
+      const secondEvent = yield* EventInstance.make(todoRetryCounted, {
+        id: "multi-2",
+      });
+      const thirdEvent = yield* EventInstance.make(todoRetryCounted, {
+        id: "multi-3",
+      });
+
+      const results = yield* engine.push(firstEvent, secondEvent, thirdEvent);
+
+      assert.strictEqual(results.length, 3);
+      assert.strictEqual(todoRetryCountedHandlerRuns, 3);
+      for (const [index, result] of results.entries()) {
+        if (!Result.isSuccess(result)) {
+          assert.fail("expected pushed Event to be accepted");
+        }
+        assert.strictEqual(
+          result.success.eventId,
+          [firstEvent, secondEvent, thirdEvent][index]?.eventId,
+        );
+      }
     }),
   );
 });

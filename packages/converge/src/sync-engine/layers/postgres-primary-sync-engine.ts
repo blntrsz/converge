@@ -83,16 +83,16 @@ export const layer: Layer.Layer<
           `,
     });
 
-    const insertEvent = SqlSchema.void({
-      Request: EventInstance,
-      execute: (event) => sql`
+    const insertEvent = (event: EventInstance) =>
+      sql<{ event_id: string }>`
         INSERT INTO event_history ${sql.insert({
           eventId: event.eventId,
           eventType: event.eventType,
           eventDetails: event.eventDetails,
         })}
-      `,
-    });
+        ON CONFLICT (event_id) DO NOTHING
+        RETURNING event_id
+      `;
 
     /**
      * @since 0.0.0
@@ -127,7 +127,7 @@ export const layer: Layer.Layer<
      * @category service-method
      */
     const push: IPrimarySyncEngine["push"] = Effect.fn("PrimarySyncEngine.push")(
-      function* (events) {
+      function* (...events) {
         return yield* Effect.forEach(
           events,
           (event) => {
@@ -154,10 +154,14 @@ export const layer: Layer.Layer<
                 });
 
                 const acceptEvent = Effect.gen(function* () {
+                  const insertedRows = yield* insertEvent(acceptedEvent);
+                  if (insertedRows.length === 0) {
+                    return acceptedEvent;
+                  }
+
                   yield* handler
                     .run(acceptedEvent)
                     .pipe(Effect.mapError(() => new EventRejected()));
-                  yield* insertEvent(acceptedEvent);
 
                   return acceptedEvent;
                 });

@@ -51,8 +51,11 @@ export const layer: Layer.Layer<EventStore, never, SqlClient.SqlClient> = Layer.
             ? sql`
               SELECT event_id, event_type, event_details, created_at
               FROM event_history
-              WHERE event_id =< ${input.cursor}
-              ORDER BY id DESC
+              WHERE id > COALESCE(
+                (SELECT id FROM event_history WHERE event_id = ${input.cursor}),
+                0
+              )
+              ORDER BY id ASC
               LIMIT ${input.limit}
             `
             : sql`
@@ -68,13 +71,16 @@ export const layer: Layer.Layer<EventStore, never, SqlClient.SqlClient> = Layer.
         cursor,
       }).pipe(Effect.catchTag("SqlError", (e) => Effect.die(e)));
 
-      const nextCursor = Array.last(rows).pipe(
-        Option.match({
-          onNone: () => Option.none<string>(),
-          onSome: (event) => Option.some(event.eventId),
-        }),
-      );
       const events = Array.take(rows, limit);
+      const nextCursor =
+        rows.length > limit
+          ? Array.last(events).pipe(
+              Option.match({
+                onNone: () => Option.none<string>(),
+                onSome: (event) => Option.some(event.eventId),
+              }),
+            )
+          : Option.none<string>();
 
       return { events, nextCursor };
     });

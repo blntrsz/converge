@@ -27,7 +27,7 @@ export interface IPrimarySyncEngine {
    * @category service-method-interface
    */
   push(
-    events: EventInstance.EventInstance[],
+    ...events: EventInstance.EventInstance[]
   ): Effect.Effect<Result.Result<EventInstance.EventInstance, EventInstance.EventInstance>[]>;
 }
 
