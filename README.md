@@ -1,5 +1,9 @@
 # converge
 
+<p align="center">
+  <img src="docs/converge.png" alt="converge" width="400" />
+</p>
+
 To install dependencies:
 
 ```bash
