@@ -8,6 +8,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@effect/platform-browser": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-pglite": "catalog:",
     "@paralleldrive/cuid2": "catalog:",
@@ -16,6 +17,7 @@
   "devDependencies": {
     "@effect/vitest": "4.0.0-beta.85",
     "@types/bun": "latest",
+    "fake-indexeddb": "^6.2.5",
     "vitest": "^2"
   },
   "peerDependencies": {
