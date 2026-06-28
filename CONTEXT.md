@@ -1,61 +1,89 @@
 # Converge
 
-Converge is a general-purpose sync engine for offline-first applications. It uses event sourcing as the shared model for changes that move between frontend and backend.
+Converge is a general-purpose sync engine for offline-first applications. Applications describe changes as Event Types, create Event Instances, and synchronize accepted Events through a Primary Event History.
 
 ## Language
 
 **Converge**:
-A general-purpose sync engine for offline-first applications that uses event sourcing as the shared model for changes between frontend and backend.
+A general-purpose sync engine for offline-first applications that uses event sourcing as the shared model for changes between replicas and a Primary.
 _Avoid_: Coverage
 
+**Primary**:
+The authoritative sync role that accepts or rejects pushed Event Instances and serves the accepted Event History.
+_Avoid_: backend, server, leader
+
+**Replica**:
+A non-authoritative sync role that can create local Event Instances, push them to the Primary, and pull accepted Events from Event History.
+_Avoid_: secondary, client, frontend
+
 **Event**:
-An immutable record of an application change that Converge persists locally, syncs between frontend and backend, and uses to build projections.
+The application change model that Converge syncs. Use Event Type for a declared kind of change and Event Instance for a concrete occurrence of that change.
 _Avoid_: operation, mutation, action
 
+**Event Type**:
+A versioned name and details schema for one kind of application change, such as `todo.created.v1`.
+_Avoid_: topic, operation type, mutation name
+
+**Event Details**:
+The application-owned data carried by an Event Instance and interpreted using its Event Type's schema.
+_Avoid_: payload, body, arguments
+
+**Event Instance**:
+A concrete occurrence of an Event Type with an Event ID and Event Details. Event Instances are pushed to the Primary and are either accepted into Event History or rejected.
+_Avoid_: event object, message, command
+
 **Event ID**:
-A globally unique identifier for one Event. The Event ID is created when a Proposed Event is recorded on the frontend and is preserved if the backend accepts the Event.
-_Avoid_: correlation ID
-
-**Previous Event ID**:
-The Event ID of the accepted Event that immediately precedes an Event in the same Event History. The first accepted Event in an Event History has no Previous Event ID.
-_Avoid_: parent event ID
-
-**Tail Event ID**:
-The latest accepted Event ID known to the frontend when a Proposed Event is recorded. During Acceptance, the accepted Event's Previous Event ID may differ from the Proposed Event's Tail Event ID if other Events were accepted first.
-_Avoid_: base event ID
+A globally unique identifier for one Event Instance. The Event ID is created before the Event Instance is pushed and is preserved if the Primary accepts it.
+_Avoid_: correlation ID, database ID
 
 **Event History**:
-The authoritative sequence of backend-accepted Events for an application scope. In single-tenant applications there is one Event History; in multi-tenant applications there is one Event History per tenant.
+The authoritative ordered sequence of accepted Event Instances for an application scope.
 _Avoid_: event log
 
+**Event Cursor**:
+An Event ID that marks a position in Event History for pulling accepted Events after that point.
+_Avoid_: offset, page token, sequence number
+
 **Proposed Event**:
-An Event recorded on the frontend that has affected local state but has not yet been accepted or rejected by the backend.
+A local Event Instance that has been created by a Replica but has not yet been accepted or rejected by the Primary.
 _Avoid_: pending event, unconfirmed event, tentative event
 
-**Proposed Event Processor**:
-Application-owned logic for one Event type that validates a Proposed Event, may consult external state, updates the backend Projection, and either succeeds so Converge accepts the Event or fails so Converge rejects it.
-_Avoid_: acceptance handler, event handler
+**Accepted Event**:
+An Event Instance that the Primary has appended to Event History.
+_Avoid_: confirmed event, committed event
+
+**Rejected Event**:
+An Event Instance that the Primary does not append to Event History.
+_Avoid_: failed event, invalid event
+
+**Event Handler**:
+Application-owned logic for one Event Type that validates or applies a pushed Event Instance during Acceptance. A handler failure rejects the Event Instance.
+_Avoid_: listener, callback, reducer
+
+**Event Router**:
+The collection of Event Handlers used to choose the application-owned logic for each pushed Event Instance.
+_Avoid_: dispatcher, registry
 
 **Acceptance**:
-The backend process that validates a Proposed Event, applies it to the backend Projection, and makes it part of the Event History if that process succeeds.
+The Primary outcome that records a pushed Event Instance in Event History after its Event Handler succeeds.
 _Avoid_: confirmation, approval, commit
 
+**Rejection**:
+The Primary outcome that leaves a pushed Event Instance out of Event History because it cannot be accepted.
+_Avoid_: failure, rollback
+
+**Push**:
+A sync request that sends Event Instances to the Primary for validation and possible Acceptance.
+_Avoid_: upload, submit, commit
+
+**Pull**:
+A sync request that asks the Primary for accepted Events after an Event Cursor.
+_Avoid_: download, fetch, sync
+
+**Event Store**:
+The storage boundary that holds Event History and retrieves accepted Event Instances.
+_Avoid_: database, event log
+
 **Projection**:
-Syncable application state derived from Events. A frontend Projection may include Proposed Events, while a backend Projection includes only accepted Events.
-_Avoid_: real state, view state
-
-**Accepted Projection**:
-Frontend Projection state derived only from accepted Events received from the backend. A Projection Cursor belongs to the Accepted Projection.
-_Avoid_: confirmed state
-
-**Optimistic Projection**:
-Frontend Projection state derived from an Accepted Projection plus current local Proposed Events. The UI reads from Optimistic Projections.
-_Avoid_: local state
-
-**Projection Cursor**:
-The latest accepted Event ID that a specific frontend Projection has processed. Each Projection advances its own Projection Cursor as it processes accepted Events from Event History, including Events that do not change that Projection.
-_Avoid_: sync cursor
-
-**Projection Bootstrap**:
-The initial frontend state for a Projection at a known Projection Cursor. After applying a Projection Bootstrap, the frontend receives accepted Events after that Projection Cursor and updates its Projection by applying them in Event History order.
-_Avoid_: snapshot
+Application state derived from accepted Event Instances. Applications own their Projections; Converge syncs Events rather than arbitrary state.
+_Avoid_: real state, view state, read model
