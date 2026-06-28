@@ -1,11 +1,6 @@
 {
   "name": "converge",
-  "module": "index.ts",
-  "type": "module",
   "private": true,
-  "scripts": {
-    "typecheck": "tsc --noEmit"
-  },
   "workspaces": {
     "packages": [
       "packages/*",
@@ -14,11 +9,23 @@
     "catalog": {
       "@effect/atom-react": "4.0.0-beta.85",
       "@effect/platform-node-shared": "4.0.0-beta.85",
+      "@effect/sql-pg": "4.0.0-beta.85",
+      "@effect/sql-pglite": "4.0.0-beta.85",
       "@effect/sql-sqlite-bun": "4.0.0-beta.85",
       "@effect/sql-sqlite-node": "4.0.0-beta.85",
+      "@paralleldrive/cuid2": "^3.3.0",
       "effect": "4.0.0-beta.85",
       "ulid": "^3.0.2"
     }
+  },
+  "type": "module",
+  "module": "index.ts",
+  "scripts": {
+    "fmt": "oxfmt .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "oxfmt": "^0.56.0"
   },
   "devDependencies": {
     "@types/bun": "latest"

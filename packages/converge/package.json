@@ -1,16 +1,22 @@
 {
   "name": "converge",
-  "module": "index.ts",
-  "type": "module",
   "private": true,
+  "type": "module",
+  "module": "index.ts",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@effect/sql-pg": "catalog:",
+    "@effect/sql-pglite": "catalog:",
+    "@paralleldrive/cuid2": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@effect/vitest": "4.0.0-beta.85",
+    "@types/bun": "latest",
+    "vitest": "^2"
   },
   "peerDependencies": {
     "typescript": "^5"
