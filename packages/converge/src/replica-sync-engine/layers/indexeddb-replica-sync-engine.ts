@@ -2,7 +2,7 @@ import { IndexedDb, IndexedDbDatabase, IndexedDbTable, IndexedDbVersion } from "
 import { Effect, Layer, Option, Queue, Result, Semaphore, Schema } from "effect";
 import { EventInstance } from "../../event/event-instance.ts";
 import { EventRouterService } from "../../event/event-router.ts";
-import { PrimarySyncEngine } from "../services/primary-sync-engine.ts";
+import { PrimarySyncEngine } from "../../primary-sync-engine/services/primary-sync-engine.ts";
 import { ReplicaSyncEngine, type IReplicaSyncEngine } from "../services/replica-sync-engine.ts";
 
 const EventHistoryRow = Schema.Struct({
@@ -169,22 +169,6 @@ export const layer: Layer.Layer<
         yield* eventHistory.insert(row as never).pipe(Effect.asVoid, Effect.orDie);
       });
 
-    const insertProposedEvent = (event: EventInstance) =>
-      Effect.gen(function* () {
-        const existing = yield* findAcceptedEvent(event.eventId);
-        if (Option.isSome(existing)) return;
-
-        const proposed = yield* findProposedEvent(event.eventId);
-        if (Option.isSome(proposed)) return;
-
-        const row: ProposedEventInsert = {
-          eventId: event.eventId,
-          eventType: event.eventType,
-          eventDetails: event.eventDetails as ProposedEventInsert["eventDetails"],
-        };
-        yield* proposedEvents.insert(row as never).pipe(Effect.asVoid, Effect.orDie);
-      });
-
     const deleteProposedEvent = (eventId: string) =>
       Effect.gen(function* () {
         const rows = yield* proposedEvents
@@ -220,6 +204,38 @@ export const layer: Layer.Layer<
           }
 
           yield* appendAcceptedEvent(event);
+        }),
+      ).pipe(Effect.orDie);
+
+    const acceptEvent = (event: EventInstance) =>
+      acceptLock.withPermits(1)(
+        Effect.gen(function* () {
+          const existing = yield* findAcceptedEvent(event.eventId);
+          if (Option.isSome(existing)) return;
+          yield* appendAcceptedEvent(event);
+        }),
+      ).pipe(Effect.orDie);
+
+    const proposeAndApplyOptimistically = (event: EventInstance) =>
+      acceptLock.withPermits(1)(
+        Effect.gen(function* () {
+          const accepted = yield* findAcceptedEvent(event.eventId);
+          if (Option.isSome(accepted)) return;
+
+          const proposed = yield* findProposedEvent(event.eventId);
+          if (Option.isSome(proposed)) return;
+
+          const row: ProposedEventInsert = {
+            eventId: event.eventId,
+            eventType: event.eventType,
+            eventDetails: event.eventDetails as ProposedEventInsert["eventDetails"],
+          };
+          yield* proposedEvents.insert(row as never).pipe(Effect.asVoid, Effect.orDie);
+
+          const handler = findHandler(event.eventType);
+          if (handler) {
+            yield* handler.run(event).pipe(Effect.orDie);
+          }
         }),
       ).pipe(Effect.orDie);
 
@@ -269,7 +285,7 @@ export const layer: Layer.Layer<
         const event = events[index];
         if (!event) continue;
         if (Result.isSuccess(result)) {
-          yield* applyLocally(event);
+          yield* acceptEvent(event);
         } else {
           yield* Effect.logWarning(
             `ReplicaSyncEngine: primary rejected event ${event.eventId}`,
@@ -339,7 +355,7 @@ export const layer: Layer.Layer<
     const push: IReplicaSyncEngine["push"] = Effect.fn("ReplicaSyncEngine.push")(
       function* (...events) {
         for (const event of events) {
-          yield* insertProposedEvent(event);
+          yield* proposeAndApplyOptimistically(event);
         }
         if (events.length > 0) {
           const taskId = yield* insertPendingTask({ kind: "forward" });

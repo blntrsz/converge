@@ -123,7 +123,7 @@ const waitForReplicaHandler = (target: number): Effect.Effect<void> =>
 
 layer(ReplicaSyncEngineLayer)((it) => {
   it.effect(
-    "push stores proposed events and forwards to primary, handler runs after confirmation",
+    "push runs the handler optimistically and forwards to primary in the background",
     () =>
       TestClock.withLive(
         Effect.gen(function* () {
@@ -141,11 +141,9 @@ layer(ReplicaSyncEngineLayer)((it) => {
 
           yield* replica.push(eventInstance);
 
-          assert.strictEqual(replicaHandlerRuns, 0);
+          assert.strictEqual(replicaHandlerRuns, 1);
 
           yield* waitForPrimaryEvent(eventInstance.eventId);
-          yield* waitForReplicaHandler(1);
-
           assert.strictEqual(replicaHandlerRuns, 1);
 
           const todos = yield* sql<{ id: string; name: string }>`
@@ -195,11 +193,11 @@ layer(ReplicaSyncEngineLayer)((it) => {
           });
 
           yield* replica.push(eventInstance);
-          assert.strictEqual(replicaHandlerRuns, 0);
+          assert.strictEqual(replicaHandlerRuns, 1);
 
           yield* replica.poke();
 
-          yield* waitForReplicaHandler(1);
+          yield* waitForPrimaryEvent(eventInstance.eventId);
           assert.strictEqual(replicaHandlerRuns, 1);
 
           const eventHistory = yield* primary.pull();
