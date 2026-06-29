@@ -1,32 +1,188 @@
-import { APITester } from "./APITester";
 import "./index.css";
-
-import logo from "./logo.svg";
-import reactLogo from "./react.svg";
+import { useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  createTodo,
+  deleteTodo,
+  setTodoCompleted,
+  syncTodos,
+  todoProjection,
+} from "./todo-replica";
 
 export function App() {
-  return (
-    <div className="max-w-7xl mx-auto p-8 text-center relative z-10">
-      <div className="flex justify-center items-center gap-8 mb-8">
-        <img
-          src={logo}
-          alt="Bun Logo"
-          className="h-24 p-6 transition-all duration-300 hover:drop-shadow-[0_0_2em_#646cffaa] scale-120"
-        />
-        <img
-          src={reactLogo}
-          alt="React Logo"
-          className="h-24 p-6 transition-all duration-300 hover:drop-shadow-[0_0_2em_#61dafbaa] animate-[spin_20s_linear_infinite]"
-        />
-      </div>
+  const todos = useSyncExternalStore(
+    todoProjection.subscribe,
+    todoProjection.getSnapshot,
+    todoProjection.getSnapshot,
+  );
+  const [title, setTitle] = useState("");
+  const [status, setStatus] = useState("Ready");
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
 
-      <h1 className="text-5xl font-bold my-4 leading-tight">Bun + React</h1>
-      <p>
-        Edit <code className="bg-[#1a1a1a] px-2 py-1 rounded font-mono">src/App.tsx</code> and save
-        to test HMR
-      </p>
-      <APITester />
-    </div>
+  const completedCount = todos.filter((todo) => todo.completed).length;
+  const openCount = todos.length - completedCount;
+
+  useEffect(() => {
+    const markOnline = () => setIsOnline(true);
+    const markOffline = () => setIsOnline(false);
+
+    window.addEventListener("online", markOnline);
+    window.addEventListener("offline", markOffline);
+
+    void syncTodos()
+      .then(() => setStatus("Sync requested"))
+      .catch((error) => setStatus(String(error)));
+
+    return () => {
+      window.removeEventListener("online", markOnline);
+      window.removeEventListener("offline", markOffline);
+    };
+  }, []);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextTitle = title.trim();
+    if (!nextTitle) return;
+
+    setTitle("");
+    setStatus("Saving locally...");
+    await createTodo(nextTitle);
+    setStatus("Saved locally; sync queued");
+  };
+
+  const handleSync = async () => {
+    setStatus("Sync requested...");
+    await syncTodos();
+    setStatus("Sync requested");
+  };
+
+  return (
+    <main className="min-h-screen px-4 py-8 text-zinc-950 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+        <section className="rounded-[2rem] border border-white/70 bg-white/70 p-6 shadow-xl shadow-zinc-200/70 backdrop-blur sm:p-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div className="space-y-4">
+              <Badge variant="outline">Converge example</Badge>
+              <div className="space-y-3">
+                <h1 className="max-w-2xl text-4xl font-bold tracking-tight sm:text-5xl">
+                  Local-first todos with primary and replica sync engines.
+                </h1>
+                <p className="max-w-2xl text-base leading-7 text-zinc-600">
+                  Writes land in the browser replica immediately, then forward to the Bun
+                  primary engine in the background. Reconcile pulls accepted events back
+                  from the server.
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-2 rounded-2xl border border-zinc-200 bg-white p-4 text-sm shadow-sm">
+              <div className="flex items-center justify-between gap-6">
+                <span className="text-zinc-500">Network</span>
+                <Badge variant={isOnline ? "default" : "secondary"}>
+                  {isOnline ? "Online" : "Offline"}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between gap-6">
+                <span className="text-zinc-500">Replica</span>
+                <span className="font-medium">IndexedDB</span>
+              </div>
+              <div className="flex items-center justify-between gap-6">
+                <span className="text-zinc-500">Primary</span>
+                <span className="font-medium">PGlite</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle>Todos</CardTitle>
+                <CardDescription>
+                  {openCount} open, {completedCount} completed. {status}.
+                </CardDescription>
+              </div>
+              <Button variant="outline" onClick={handleSync}>
+                Sync now
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <form onSubmit={handleSubmit} className="flex flex-col gap-3 sm:flex-row">
+              <Input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Add a todo, even while offline"
+                aria-label="Todo title"
+              />
+              <Button type="submit" disabled={!title.trim()}>
+                Add todo
+              </Button>
+            </form>
+
+            <div className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white">
+              {todos.length === 0 ? (
+                <div className="p-8 text-center text-sm text-zinc-500">
+                  Add your first todo. It will appear before the network roundtrip finishes.
+                </div>
+              ) : (
+                todos.map((todo) => (
+                  <div key={todo.id} className="flex items-center gap-3 p-4">
+                    <input
+                      type="checkbox"
+                      checked={todo.completed}
+                      onChange={(event) => {
+                        setStatus("Saving locally...");
+                        void setTodoCompleted(todo.id, event.target.checked).then(() => {
+                          setStatus("Saved locally; sync queued");
+                        });
+                      }}
+                      className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
+                      aria-label={`Mark ${todo.title} complete`}
+                    />
+                    <span
+                      className={
+                        todo.completed
+                          ? "flex-1 text-sm text-zinc-400 line-through"
+                          : "flex-1 text-sm font-medium text-zinc-900"
+                      }
+                    >
+                      {todo.title}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setStatus("Saving locally...");
+                        void deleteTodo(todo.id).then(() => {
+                          setStatus("Saved locally; sync queued");
+                        });
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardContent>
+          <CardFooter className="justify-between text-xs text-zinc-500">
+            <span>Local projection persists in localStorage.</span>
+            <span>Replica event log persists in IndexedDB.</span>
+          </CardFooter>
+        </Card>
+      </div>
+    </main>
   );
 }
 

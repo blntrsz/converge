@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "bun --hot src/index.ts",
     "start": "NODE_ENV=production bun src/index.ts",
-    "build": "bun run build.ts"
+    "build": "bun run build.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@effect/platform-browser": "catalog:",
     "bun-plugin-tailwind": "^0.1.2",
+    "effect": "catalog:",
     "react": "^19",
     "react-dom": "^19",
     "tailwindcss": "^4.1.11"
