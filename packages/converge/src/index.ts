@@ -1,2 +1,3 @@
 export * from "./event";
-export * from "./sync-engine";
+export * from "./primary-sync-engine";
+export * from "./replica-sync-engine";
