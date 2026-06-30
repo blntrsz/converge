@@ -7,12 +7,15 @@
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { ProjectionRegistryProvider } from "../../../packages/converge/src/projection/index.ts";
 import { App } from "./App";
 
 const elem = document.getElementById("root")!;
 const app = (
   <StrictMode>
-    <App />
+    <ProjectionRegistryProvider>
+      <App />
+    </ProjectionRegistryProvider>
   </StrictMode>
 );
 

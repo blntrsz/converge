@@ -1,7 +1,8 @@
 import "./index.css";
-import { useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useProjection } from "../../../packages/converge/src/projection/index.ts";
 import {
   Card,
   CardContent,
@@ -20,11 +21,7 @@ import {
 } from "./todo-replica";
 
 export function App() {
-  const todos = useSyncExternalStore(
-    todoProjection.subscribe,
-    todoProjection.getSnapshot,
-    todoProjection.getSnapshot,
-  );
+  const todos = useProjection(todoProjection);
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState("Ready");
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -78,9 +75,8 @@ export function App() {
                   Local-first todos with primary and replica sync engines.
                 </h1>
                 <p className="max-w-2xl text-base leading-7 text-zinc-600">
-                  Writes land in the browser replica immediately, then forward to the Bun
-                  primary engine in the background. Reconcile pulls accepted events back
-                  from the server.
+                  Writes land in the browser replica immediately, then forward to the Bun primary
+                  engine in the background. Reconcile pulls accepted events back from the server.
                 </p>
               </div>
             </div>
@@ -177,7 +173,7 @@ export function App() {
             </div>
           </CardContent>
           <CardFooter className="justify-between text-xs text-zinc-500">
-            <span>Local projection persists in localStorage.</span>
+            <span>Projection persists via Converge + Effect Atom.</span>
             <span>Replica event log persists in IndexedDB.</span>
           </CardFooter>
         </Card>
