@@ -235,4 +235,37 @@ layer(ReplicaSyncEngineLayer)((it) => {
       ),
     30000,
   );
+
+  it.effect(
+    "accepted local proposals do not skip earlier primary events",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+
+          const remoteEvent = yield* EventInstance.make(todoCreated, {
+            id: "5-remote",
+            name: "Buy apples",
+          });
+
+          const localEvent = yield* EventInstance.make(todoCreated, {
+            id: "5-local",
+            name: "Buy oranges",
+          });
+
+          yield* primary.push(remoteEvent);
+          yield* replica.push(localEvent);
+          assert.strictEqual(replicaHandlerRuns, 1);
+
+          yield* waitForPrimaryEvent(localEvent.eventId);
+          yield* replica.poke();
+          yield* waitForReplicaHandler(2);
+
+          assert.strictEqual(replicaHandlerRuns, 2);
+        }),
+      ),
+    30000,
+  );
 });

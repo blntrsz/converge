@@ -7,6 +7,7 @@ import {
   EventHandler,
   EventInstance,
   EventRouter,
+  HttpPrimarySyncEngine,
   PostgresPrimarySyncEngine,
   PrimarySyncEngine,
 } from "../src/index.ts";
@@ -105,6 +106,11 @@ const EventRouterLayer = EventRouter.layer({
 const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provideMerge(EventRouterLayer),
   Layer.provideMerge(PgSqlClientWithAllMigrations),
+);
+
+const PrimarySyncEngineOnlyLayer = PostgresPrimarySyncEngine.layer.pipe(
+  Layer.provide(EventRouterLayer),
+  Layer.provide(PgSqlClientWithAllMigrations),
 );
 
 layer(PrimarySyncEngineLayer)((it) => {
@@ -207,4 +213,60 @@ layer(PrimarySyncEngineLayer)((it) => {
       }
     }),
   );
+
+  it.effect("serves primary sync over HTTP", () => {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineOnlyLayer, {
+      prefix: "/sync",
+      disableLogger: true,
+    });
+    const fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      server.handler(
+        new Request(input instanceof Request ? input.url : String(input), init),
+      )) as typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+      const acceptedEvent = yield* EventInstance.make(todoCreated, {
+        id: "http-1",
+        name: "Buy coffee",
+      });
+      const rejectedEvent = new EventInstance.EventInstance({
+        eventId: "http-rejected",
+        eventType: "todo.unknown.v1",
+        eventDetails: {},
+      });
+
+      const results = yield* engine.push(acceptedEvent, rejectedEvent);
+      assert.strictEqual(results.length, 2);
+
+      const acceptedResult = results[0]!;
+      if (!Result.isSuccess(acceptedResult)) {
+        assert.fail("expected HTTP push to accept the known Event");
+      }
+      assert.strictEqual(acceptedResult.success.eventId, acceptedEvent.eventId);
+
+      const rejectedResult = results[1]!;
+      if (Result.isSuccess(rejectedResult)) {
+        assert.fail("expected HTTP push to reject the unknown Event");
+      }
+      assert.strictEqual(rejectedResult.failure.eventId, rejectedEvent.eventId);
+
+      const page = yield* engine.pull();
+      assert.strictEqual(page.hasNext, false);
+      assert.strictEqual(page.data.length, 1);
+      assert.strictEqual(page.data[0]?.eventId, acceptedEvent.eventId);
+      assert.deepStrictEqual(page.data[0]?.eventDetails, {
+        id: "http-1",
+        name: "Buy coffee",
+      });
+    }).pipe(
+      Effect.provide(
+        HttpPrimarySyncEngine.layer({
+          baseUrl: "http://test/sync",
+          fetch,
+        }),
+      ),
+      Effect.ensuring(Effect.promise(() => server.dispose())),
+    );
+  });
 });

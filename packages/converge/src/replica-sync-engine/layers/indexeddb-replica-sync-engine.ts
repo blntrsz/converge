@@ -198,21 +198,19 @@ export const layer: Layer.Layer<
           const existing = yield* findAcceptedEvent(event.eventId);
           if (Option.isSome(existing)) return;
 
-          const handler = findHandler(event.eventType);
-          if (handler) {
-            yield* handler.run(event).pipe(Effect.orDie);
+          const proposed = yield* findProposedEvent(event.eventId);
+
+          if (Option.isNone(proposed)) {
+            const handler = findHandler(event.eventType);
+            if (handler) {
+              yield* handler.run(event).pipe(Effect.orDie);
+            }
           }
 
           yield* appendAcceptedEvent(event);
-        }),
-      ).pipe(Effect.orDie);
-
-    const acceptEvent = (event: EventInstance) =>
-      acceptLock.withPermits(1)(
-        Effect.gen(function* () {
-          const existing = yield* findAcceptedEvent(event.eventId);
-          if (Option.isSome(existing)) return;
-          yield* appendAcceptedEvent(event);
+          if (Option.isSome(proposed)) {
+            yield* deleteProposedEvent(event.eventId);
+          }
         }),
       ).pipe(Effect.orDie);
 
@@ -284,14 +282,12 @@ export const layer: Layer.Layer<
       for (const [index, result] of results.entries()) {
         const event = events[index];
         if (!event) continue;
-        if (Result.isSuccess(result)) {
-          yield* acceptEvent(event);
-        } else {
+        if (Result.isFailure(result)) {
           yield* Effect.logWarning(
             `ReplicaSyncEngine: primary rejected event ${event.eventId}`,
           );
+          yield* deleteProposedEvent(event.eventId);
         }
-        yield* deleteProposedEvent(event.eventId);
       }
     });
 
