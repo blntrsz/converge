@@ -73,6 +73,11 @@ type ReducerContext<TReducer> =
 type StorageError<TStorage> =
   TStorage extends ProjectionStorage<any, infer TError> ? TError : never;
 
+type EffectError<TEffect> = TEffect extends Effect.Effect<any, infer TError, any> ? TError : never;
+
+type EffectContext<TEffect> =
+  TEffect extends Effect.Effect<any, any, infer TContext> ? TContext : never;
+
 type ProjectionHandlers<
   TSnapshot,
   TReducers extends ReadonlyArray<AnyProjectionReducer<TSnapshot>>,
@@ -126,15 +131,19 @@ export function reducer<
   const TEventType extends string,
   const TEventDetails extends Schema.Struct.Fields,
   TSnapshot,
-  TError,
-  TContext,
+  TEffect extends Effect.Effect<TSnapshot, any, any>,
 >(
   event: Event.Event<TEventType, TEventDetails>,
   reduce: (
     snapshot: TSnapshot,
     event: EventInstance.EventInstance<TEventType, TEventDetails>,
-  ) => Effect.Effect<TSnapshot, TError, TContext>,
-): ProjectionReducer<TSnapshot, Event.Event<TEventType, TEventDetails>, TError, TContext> {
+  ) => TEffect,
+): ProjectionReducer<
+  TSnapshot,
+  Event.Event<TEventType, TEventDetails>,
+  EffectError<TEffect>,
+  EffectContext<TEffect>
+> {
   return { event, reduce };
 }
 
@@ -152,7 +161,10 @@ export function make<
   readonly reducers: TReducers;
   readonly storage?: TStorage;
 }): Projection<TSnapshot, TReducers, TStorage> {
-  const initialValue = loadInitialSnapshot(options.initialValue, options.storage);
+  const initialValue: TSnapshot = loadInitialSnapshot<TSnapshot>(
+    options.initialValue,
+    options.storage,
+  );
   const ref = AtomRef.make(initialValue);
   const reducerByEventType = new Map(
     options.reducers.map((projectionReducer) => [
@@ -218,7 +230,10 @@ export function make<
  * @category storage
  */
 export function localStorage<const TSchema extends Schema.Schema<any>>(
-  schema: TSchema,
+  schema: TSchema & {
+    readonly DecodingServices: never;
+    readonly EncodingServices: never;
+  },
   options: {
     readonly key: string;
     readonly storage?: ProjectionKeyValueStorage;
@@ -243,11 +258,14 @@ export function localStorage<const TSchema extends Schema.Schema<any>>(
         return Option.none<Schema.Schema.Type<TSchema>>();
       }
 
-      return yield* decodeSnapshot(parsed).pipe(
-        Effect.map(Option.some),
-        Effect.catchAll(() => Effect.succeed(Option.none<Schema.Schema.Type<TSchema>>())),
+      const decoded = yield* decodeSnapshot(parsed).pipe(
+        Effect.catch(() => Effect.succeed(undefined)),
       );
-    }).pipe(Effect.catchAll(() => Effect.succeed(Option.none<Schema.Schema.Type<TSchema>>()))),
+
+      return decoded === undefined
+        ? Option.none<Schema.Schema.Type<TSchema>>()
+        : Option.some(decoded);
+    }).pipe(Effect.catch(() => Effect.succeed(Option.none<Schema.Schema.Type<TSchema>>()))),
     save: (snapshot) =>
       Effect.gen(function* () {
         const storage = yield* resolveStorage(options.key, options.storage);
@@ -284,7 +302,7 @@ const loadInitialSnapshot = <TSnapshot>(
   if (!storage) return initialValue;
 
   const stored = Effect.runSync(
-    storage.load.pipe(Effect.catchAll(() => Effect.succeed(Option.none<TSnapshot>()))),
+    storage.load.pipe(Effect.catch(() => Effect.succeed(Option.none<TSnapshot>()))),
   );
 
   return Option.getOrElse(stored, () => initialValue);

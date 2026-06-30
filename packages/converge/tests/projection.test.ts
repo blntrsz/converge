@@ -1,7 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
-import { Event, EventInstance, Projection, type ProjectionKeyValueStorage } from "../src/index.ts";
+import { Event, EventInstance, type ProjectionKeyValueStorage } from "../src/index.ts";
+import * as Projection from "../src/projection/index.ts";
 
 const todoCreated = Event.make("todo.created.v1", {
   id: Schema.String,
