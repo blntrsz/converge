@@ -1,41 +1,17 @@
 import { IndexedDb } from "@effect/platform-browser";
-import { Effect, Layer, ManagedRuntime, Result } from "effect";
+import { Effect, Layer, ManagedRuntime } from "effect";
 import * as EventHandler from "../../../packages/converge/src/event/event-handler.ts";
 import * as EventInstance from "../../../packages/converge/src/event/event-instance.ts";
 import * as EventRouter from "../../../packages/converge/src/event/event-router.ts";
+import * as HttpPrimarySyncEngine from "../../../packages/converge/src/primary-sync-engine/layers/http-primary-sync-engine.ts";
 import * as IndexedDbReplicaSyncEngine from "../../../packages/converge/src/replica-sync-engine/layers/indexeddb-replica-sync-engine.ts";
 import * as ReplicaSyncEngine from "../../../packages/converge/src/replica-sync-engine/services/replica-sync-engine.ts";
-import * as PrimarySyncEngine from "../../../packages/converge/src/primary-sync-engine/services/primary-sync-engine.ts";
 import {
   todoCompletionSet,
   todoCreated,
   todoDeleted,
   type Todo,
 } from "./todo-events";
-
-type WireEvent = {
-  readonly eventId: string;
-  readonly eventType: string;
-  readonly eventDetails: unknown;
-};
-
-type PullResponse =
-  | {
-      readonly data: WireEvent[];
-      readonly hasNext: true;
-      readonly cursor: string;
-    }
-  | {
-      readonly data: WireEvent[];
-      readonly hasNext: false;
-    };
-
-type PushResponse = {
-  readonly results: ReadonlyArray<
-    | { readonly ok: true; readonly event: WireEvent }
-    | { readonly ok: false; readonly event: WireEvent }
-  >;
-};
 
 const projectionStorageKey = "converge-react.todos";
 
@@ -150,73 +126,9 @@ const replicaTodoDeletedHandler = EventHandler.make(
     }),
 );
 
-const eventFromWire = (event: WireEvent) =>
-  new EventInstance.EventInstance({
-    eventId: event.eventId,
-    eventType: event.eventType,
-    eventDetails: event.eventDetails,
-  });
-
-const eventToWire = (event: EventInstance.EventInstance): WireEvent => ({
-  eventId: event.eventId,
-  eventType: event.eventType,
-  eventDetails: event.eventDetails,
+const HttpPrimarySyncEngineLayer = HttpPrimarySyncEngine.layer({
+  baseUrl: "/api/sync",
 });
-
-const pull: PrimarySyncEngine.IPrimarySyncEngine["pull"] = (cursor) =>
-  Effect.tryPromise({
-    async try() {
-      const url = new URL("/api/sync/pull", window.location.origin);
-      if (cursor) {
-        url.searchParams.set("cursor", cursor);
-      }
-
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Pull failed with ${response.status}`);
-      }
-
-      const page = (await response.json()) as PullResponse;
-      const data = page.data.map(eventFromWire);
-
-      return page.hasNext
-        ? { data, hasNext: true as const, cursor: page.cursor }
-        : { data, hasNext: false as const };
-    },
-    catch: (error) => error,
-  }).pipe(Effect.orDie);
-
-const push: PrimarySyncEngine.IPrimarySyncEngine["push"] = (...events) =>
-  Effect.tryPromise({
-    async try() {
-      const response = await fetch("/api/sync/push", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ events: events.map(eventToWire) }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Push failed with ${response.status}`);
-      }
-
-      return (await response.json()) as PushResponse;
-    },
-    catch: (error) => error,
-  }).pipe(
-    Effect.map((response) =>
-      response.results.map((result) =>
-        result.ok
-          ? Result.succeed(eventFromWire(result.event))
-          : Result.fail(eventFromWire(result.event)),
-      ),
-    ),
-    Effect.orDie,
-  );
-
-const HttpPrimarySyncEngineLayer = Layer.succeed(
-  PrimarySyncEngine.PrimarySyncEngine,
-  PrimarySyncEngine.PrimarySyncEngine.of({ pull, push }),
-);
 
 const ReplicaEventRouterLayer = EventRouter.layer({
   handlers: [
