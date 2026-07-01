@@ -9,17 +9,14 @@ import * as EventInstance from "../event/event-instance";
  * @since 0.0.0
  * @category error
  */
-export class ProjectionStorageError {
-  readonly _tag = "ProjectionStorageError";
-
-  constructor(
-    readonly input: {
-      readonly operation: "resolve" | "encode" | "save";
-      readonly key: string;
-      readonly cause: unknown;
-    },
-  ) {}
-}
+export class ProjectionStorageError extends Schema.TaggedErrorClass<ProjectionStorageError>()(
+  "ProjectionStorageError",
+  {
+    operation: Schema.Literals(["resolve", "encode", "save"]),
+    key: Schema.String,
+    cause: Schema.Unknown,
+  },
+) {}
 
 /**
  * @since 0.0.0
