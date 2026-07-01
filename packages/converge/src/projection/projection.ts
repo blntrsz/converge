@@ -29,7 +29,6 @@ export interface IProjection<TSnapshot, TError = never> {
   readonly atom: Atom.Atom<TSnapshot>;
   readonly get: Effect.Effect<TSnapshot>;
   readonly set: (snapshot: TSnapshot) => Effect.Effect<void, TError>;
-  readonly update: (f: (snapshot: TSnapshot) => TSnapshot) => Effect.Effect<void, TError>;
   readonly subscribe: (listener: () => void) => Effect.Effect<() => void>;
 }
 
@@ -86,7 +85,6 @@ export function make<
       atom,
       get: Effect.sync(() => ref.value),
       set: (snapshot) => lock.withPermits(1)(commit(snapshot)),
-      update: (f) => lock.withPermits(1)(commit(f(ref.value))),
       subscribe: (listener) => Effect.sync(() => ref.subscribe(() => listener())),
     };
   });

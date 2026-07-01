@@ -40,13 +40,14 @@ const todoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const projection = yield* TodoProjection;
+    const todos = yield* projection.get;
 
-    yield* projection.update((todos) => {
-      if (todos.some((todo) => todo.id === event.eventDetails.id)) {
-        return todos;
-      }
+    if (todos.some((todo) => todo.id === event.eventDetails.id)) {
+      return;
+    }
 
-      return sortTodos([
+    yield* projection.set(
+      sortTodos([
         ...todos,
         {
           id: event.eventDetails.id,
@@ -54,8 +55,8 @@ const todoCreatedHandler = EventHandler.make(
           completed: false,
           createdAt: event.eventDetails.createdAt,
         },
-      ]);
-    });
+      ]),
+    );
   }),
 );
 
@@ -63,8 +64,9 @@ const todoCompletionSetHandler = EventHandler.make(
   todoCompletionSet,
   Effect.fn(function* (event) {
     const projection = yield* TodoProjection;
+    const todos = yield* projection.get;
 
-    yield* projection.update((todos) =>
+    yield* projection.set(
       todos.map((todo) =>
         todo.id === event.eventDetails.id
           ? { ...todo, completed: event.eventDetails.completed }

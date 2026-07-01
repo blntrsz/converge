@@ -28,7 +28,8 @@ const todoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const todos = yield* TodoProjection;
-    yield* todos.update((snapshot) => [...snapshot, event.eventDetails]);
+    const snapshot = yield* todos.get;
+    yield* todos.set([...snapshot, event.eventDetails]);
   }),
 );
 

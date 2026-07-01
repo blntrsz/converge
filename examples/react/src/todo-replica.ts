@@ -29,13 +29,14 @@ const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
+    const todos = yield* todosProjection.get;
 
-    yield* todosProjection.update((todos) => {
-      if (todos.some((todo) => todo.id === event.eventDetails.id)) {
-        return todos;
-      }
+    if (todos.some((todo) => todo.id === event.eventDetails.id)) {
+      return;
+    }
 
-      return sortTodos([
+    yield* todosProjection.set(
+      sortTodos([
         ...todos,
         {
           id: event.eventDetails.id,
@@ -43,8 +44,8 @@ const replicaTodoCreatedHandler = EventHandler.make(
           completed: false,
           createdAt: event.eventDetails.createdAt,
         },
-      ]);
-    });
+      ]),
+    );
   }),
 );
 
@@ -52,8 +53,9 @@ const replicaTodoCompletionSetHandler = EventHandler.make(
   todoCompletionSet,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
+    const todos = yield* todosProjection.get;
 
-    yield* todosProjection.update((todos) =>
+    yield* todosProjection.set(
       todos.map((todo) =>
         todo.id === event.eventDetails.id
           ? { ...todo, completed: event.eventDetails.completed }
@@ -67,10 +69,9 @@ const replicaTodoDeletedHandler = EventHandler.make(
   todoDeleted,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
+    const todos = yield* todosProjection.get;
 
-    yield* todosProjection.update((todos) =>
-      todos.filter((todo) => todo.id !== event.eventDetails.id),
-    );
+    yield* todosProjection.set(todos.filter((todo) => todo.id !== event.eventDetails.id));
   }),
 );
 
