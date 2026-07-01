@@ -13,6 +13,7 @@ import {
   IndexedDbReplicaSyncEngine,
   PostgresPrimarySyncEngine,
   PrimarySyncEngine,
+  ReplicaApplyContext,
   ReplicaSyncEngine,
 } from "../src/index.ts";
 import { PgliteSqlClient } from "../src/pglite-client.ts";
@@ -23,12 +24,25 @@ const todoCreated = Event.make("todo.created.v1", {
 });
 
 let replicaHandlerRuns = 0;
+let optimisticHandlerRuns = 0;
+let acceptedHandlerRuns = 0;
+let rejectedHandlerRuns = 0;
 
 const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* () {
+    const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
+    const { phase } = yield* applyContext.current;
+
     yield* Effect.sync(() => {
       replicaHandlerRuns += 1;
+      if (phase === "optimistic") {
+        optimisticHandlerRuns += 1;
+      } else if (phase === "accepted") {
+        acceptedHandlerRuns += 1;
+      } else {
+        rejectedHandlerRuns += 1;
+      }
     });
   }),
 );
@@ -95,11 +109,15 @@ const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer("test-repl
 const ReplicaSyncEngineLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provide(ReplicaEventRouterLayer),
   Layer.provide(ReplicaDatabaseLayer),
+  Layer.provideMerge(ReplicaApplyContext.layer),
   Layer.provideMerge(PrimarySyncEngineLayer),
 );
 
 const resetCounters = () => {
   replicaHandlerRuns = 0;
+  optimisticHandlerRuns = 0;
+  acceptedHandlerRuns = 0;
+  rejectedHandlerRuns = 0;
 };
 
 const waitForPrimaryEvent = (eventId: string): Effect.Effect<void, never, PrimarySyncEngine.PrimarySyncEngine> =>
@@ -142,9 +160,13 @@ layer(ReplicaSyncEngineLayer)((it) => {
           yield* replica.push(eventInstance);
 
           assert.strictEqual(replicaHandlerRuns, 1);
+          assert.strictEqual(optimisticHandlerRuns, 1);
+          assert.strictEqual(acceptedHandlerRuns, 0);
 
           yield* waitForPrimaryEvent(eventInstance.eventId);
-          assert.strictEqual(replicaHandlerRuns, 1);
+          assert.strictEqual(replicaHandlerRuns, 2);
+          assert.strictEqual(optimisticHandlerRuns, 1);
+          assert.strictEqual(acceptedHandlerRuns, 1);
 
           const todos = yield* sql<{ id: string; name: string }>`
             SELECT id, name FROM todo WHERE id = ${eventInstance.eventDetails.id}
@@ -171,8 +193,9 @@ layer(ReplicaSyncEngineLayer)((it) => {
           yield* replica.push(eventInstance);
           yield* replica.push(eventInstance);
 
-          yield* waitForReplicaHandler(1);
-          assert.strictEqual(replicaHandlerRuns, 1);
+          yield* waitForReplicaHandler(2);
+          assert.strictEqual(optimisticHandlerRuns, 1);
+          assert.strictEqual(acceptedHandlerRuns, 1);
         }),
       ),
     30000,
@@ -194,11 +217,13 @@ layer(ReplicaSyncEngineLayer)((it) => {
 
           yield* replica.push(eventInstance);
           assert.strictEqual(replicaHandlerRuns, 1);
+          assert.strictEqual(optimisticHandlerRuns, 1);
 
           yield* replica.poke();
 
           yield* waitForPrimaryEvent(eventInstance.eventId);
-          assert.strictEqual(replicaHandlerRuns, 1);
+          assert.strictEqual(replicaHandlerRuns, 2);
+          assert.strictEqual(acceptedHandlerRuns, 1);
 
           const eventHistory = yield* primary.pull();
           const found = eventHistory.data.some((e) => e.eventId === eventInstance.eventId);
@@ -227,6 +252,8 @@ layer(ReplicaSyncEngineLayer)((it) => {
           yield* replica.poke();
           yield* waitForReplicaHandler(1);
           assert.strictEqual(replicaHandlerRuns, 1);
+          assert.strictEqual(optimisticHandlerRuns, 0);
+          assert.strictEqual(acceptedHandlerRuns, 1);
 
           yield* replica.poke();
           yield* waitForReplicaHandler(2);
@@ -258,12 +285,15 @@ layer(ReplicaSyncEngineLayer)((it) => {
           yield* primary.push(remoteEvent);
           yield* replica.push(localEvent);
           assert.strictEqual(replicaHandlerRuns, 1);
+          assert.strictEqual(optimisticHandlerRuns, 1);
 
           yield* waitForPrimaryEvent(localEvent.eventId);
           yield* replica.poke();
-          yield* waitForReplicaHandler(2);
+          yield* waitForReplicaHandler(3);
 
-          assert.strictEqual(replicaHandlerRuns, 2);
+          assert.strictEqual(replicaHandlerRuns, 3);
+          assert.strictEqual(optimisticHandlerRuns, 1);
+          assert.strictEqual(acceptedHandlerRuns, 2);
         }),
       ),
     30000,

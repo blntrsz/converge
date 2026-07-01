@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import * as Event from "../../../packages/converge/src/event/event.ts";
+import { Event } from "converge/event";
 
 export const todoCreated = Event.make("todo.created.v1", {
   id: Schema.String,
@@ -16,9 +16,13 @@ export const todoDeleted = Event.make("todo.deleted.v1", {
   id: Schema.String,
 });
 
-export type Todo = {
-  readonly id: string;
-  readonly title: string;
-  readonly completed: boolean;
-  readonly createdAt: number;
-};
+export const TodoSchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  completed: Schema.Boolean,
+  createdAt: Schema.Number,
+});
+
+export const TodoListSchema = Schema.Array(TodoSchema);
+
+export type Todo = Schema.Schema.Type<typeof TodoSchema>;

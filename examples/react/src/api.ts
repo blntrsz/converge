@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
-import * as HttpPrimarySyncEngine from "../../../packages/converge/src/primary-sync-engine/layers/http-primary-sync-engine.ts";
+import { HttpPrimarySyncEngine } from "converge/primary-sync-engine";
 import { listPrimaryTodos, PrimaryTodoLayer } from "./todo-primary";
 
 const json = (body: unknown, status?: number) =>
