@@ -3,7 +3,7 @@ import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { EventHandler, EventRouter } from "converge/event";
 import { PostgresPrimarySyncEngine } from "converge/primary-sync-engine";
-import { PgliteSqlClient } from "converge/pglite-client";
+import { PgliteSqlClient } from "../../../packages/converge/src/pglite-client.ts";
 import {
   todoCompletionSet,
   todoCreated,

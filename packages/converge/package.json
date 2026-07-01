@@ -7,8 +7,7 @@
     "./event": "./src/event/index.ts",
     "./primary-sync-engine": "./src/primary-sync-engine/index.ts",
     "./projection": "./src/projection/index.ts",
-    "./replica-sync-engine": "./src/replica-sync-engine/index.ts",
-    "./pglite-client": "./src/pglite-client.ts"
+    "./replica-sync-engine": "./src/replica-sync-engine/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
