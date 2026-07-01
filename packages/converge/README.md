@@ -16,12 +16,11 @@ This project was created using `bun init` in bun v1.3.13. [Bun](https://bun.com)
 
 ## React projections
 
-Projection services expose `query`, `mutation`, and keyed `optimisticMutation` over typed snapshots. Accepted mutations persist; optimistic mutations stay in memory and are removed when the replica settles an accepted or rejected event.
+Projection services expose `query` and `mutation` over typed snapshots. In replica handlers, the provided projection dependency makes `mutation` optimistic, accepted, or rejected based on the current replica apply phase.
 
 ```ts
 import { EventHandler } from "converge/event";
 import { IndexedDbProjection, Projection } from "converge/projection";
-import { ReplicaApplyContext } from "converge/replica-sync-engine";
 
 class TodoProjection extends Context.Service<
   TodoProjection,
@@ -32,23 +31,14 @@ const todoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const todos = yield* TodoProjection;
-    const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
-    const { eventId, phase } = yield* applyContext.current;
     const apply = (snapshot: ReadonlyArray<Todo>) =>
       [[...snapshot, event.eventDetails], undefined] as const;
 
-    if (phase === "optimistic") {
-      yield* todos.optimisticMutation(eventId, apply);
-    } else if (phase === "accepted") {
-      yield* todos.mutation(apply);
-      yield* todos.removeOptimisticMutation(eventId);
-    } else {
-      yield* todos.removeOptimisticMutation(eventId);
-    }
+    yield* todos.mutation(apply);
   }),
 );
 
-const TodoProjectionLayer = IndexedDbProjection.indexedDbLayer(TodoProjection, {
+const TodoProjectionLayer = IndexedDbProjection.indexedDbReplicaLayer(TodoProjection, {
   databaseName: "todo-projections",
   key: "todos",
   schema: TodoListSchema,

@@ -30,8 +30,6 @@ const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
-    const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
-    const { eventId, phase } = yield* applyContext.current;
 
     const applyTodoCreated = (todos: ReadonlyArray<Todo>) => {
       if (todos.some((todo) => todo.id === event.eventDetails.id)) {
@@ -52,14 +50,7 @@ const replicaTodoCreatedHandler = EventHandler.make(
       ] as const;
     };
 
-    if (phase === "optimistic") {
-      yield* todosProjection.optimisticMutation(eventId, applyTodoCreated);
-    } else if (phase === "accepted") {
-      yield* todosProjection.mutation(applyTodoCreated);
-      yield* todosProjection.removeOptimisticMutation(eventId);
-    } else {
-      yield* todosProjection.removeOptimisticMutation(eventId);
-    }
+    yield* todosProjection.mutation(applyTodoCreated);
   }),
 );
 
@@ -67,8 +58,6 @@ const replicaTodoCompletionSetHandler = EventHandler.make(
   todoCompletionSet,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
-    const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
-    const { eventId, phase } = yield* applyContext.current;
 
     const applyTodoCompletionSet = (todos: ReadonlyArray<Todo>) => [
       todos.map((todo) =>
@@ -79,14 +68,7 @@ const replicaTodoCompletionSetHandler = EventHandler.make(
       undefined,
     ] as const;
 
-    if (phase === "optimistic") {
-      yield* todosProjection.optimisticMutation(eventId, applyTodoCompletionSet);
-    } else if (phase === "accepted") {
-      yield* todosProjection.mutation(applyTodoCompletionSet);
-      yield* todosProjection.removeOptimisticMutation(eventId);
-    } else {
-      yield* todosProjection.removeOptimisticMutation(eventId);
-    }
+    yield* todosProjection.mutation(applyTodoCompletionSet);
   }),
 );
 
@@ -94,22 +76,13 @@ const replicaTodoDeletedHandler = EventHandler.make(
   todoDeleted,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
-    const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
-    const { eventId, phase } = yield* applyContext.current;
 
     const applyTodoDeleted = (todos: ReadonlyArray<Todo>) => [
       todos.filter((todo) => todo.id !== event.eventDetails.id),
       undefined,
     ] as const;
 
-    if (phase === "optimistic") {
-      yield* todosProjection.optimisticMutation(eventId, applyTodoDeleted);
-    } else if (phase === "accepted") {
-      yield* todosProjection.mutation(applyTodoDeleted);
-      yield* todosProjection.removeOptimisticMutation(eventId);
-    } else {
-      yield* todosProjection.removeOptimisticMutation(eventId);
-    }
+    yield* todosProjection.mutation(applyTodoDeleted);
   }),
 );
 
@@ -121,12 +94,17 @@ const ReplicaEventRouterLayer = EventRouter.layer({
   handlers: [replicaTodoCreatedHandler, replicaTodoCompletionSetHandler, replicaTodoDeletedHandler],
 });
 
-const TodoProjectionLayer = IndexedDbProjection.indexedDbLayer(TodoProjection, {
+const ReplicaApplyContextLayer = ReplicaApplyContext.layer;
+
+const TodoProjectionLayer = IndexedDbProjection.indexedDbReplicaLayer(TodoProjection, {
   databaseName: "converge-react-todos-projection",
   key: projectionStorageKey,
   schema: TodoListSchema,
   initialValue: [] as ReadonlyArray<Todo>,
-}).pipe(Layer.provide(IndexedDb.layerWindow));
+}).pipe(
+  Layer.provide(ReplicaApplyContextLayer),
+  Layer.provide(IndexedDb.layerWindow),
+);
 
 const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
   "converge-react-todos-replica",
@@ -135,7 +113,7 @@ const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
 const ReplicaTodoLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provide(ReplicaEventRouterLayer),
   Layer.provide(ReplicaDatabaseLayer),
-  Layer.provideMerge(ReplicaApplyContext.layer),
+  Layer.provideMerge(ReplicaApplyContextLayer),
   Layer.provideMerge(TodoProjectionLayer),
   Layer.provideMerge(HttpPrimarySyncEngineLayer),
 );

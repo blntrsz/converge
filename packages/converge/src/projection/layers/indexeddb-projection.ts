@@ -5,6 +5,7 @@ import {
   IndexedDbVersion,
 } from "@effect/platform-browser";
 import { Context, Effect, Layer, Option, Schema } from "effect";
+import { ReplicaApplyContext } from "../../replica-sync-engine/services/apply-context.ts";
 import {
   make,
   ProjectionStorageError,
@@ -161,6 +162,43 @@ export function indexedDbLayer<TIdentifier, const TSchema extends Schema.Schema<
       return yield* make({
         initialValue: options.initialValue,
         storage,
+      });
+    }),
+  ).pipe(Layer.provide(databaseLayer(options.databaseName)));
+}
+
+/**
+ * @since 0.0.0
+ * @category layer
+ */
+export function indexedDbReplicaLayer<TIdentifier, const TSchema extends Schema.Schema<any>>(
+  tag: Context.Service<
+    TIdentifier,
+    IReactiveProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError>
+  >,
+  options: {
+    readonly databaseName?: string;
+    readonly key: string;
+    readonly schema: TSchema & {
+      readonly DecodingServices: never;
+      readonly EncodingServices: never;
+    };
+    readonly initialValue: Schema.Schema.Type<TSchema>;
+  },
+): Layer.Layer<
+  TIdentifier,
+  ProjectionStorageError | IndexedDbDatabase.IndexedDbDatabaseError,
+  IndexedDb.IndexedDb | ReplicaApplyContext
+> {
+  return Layer.effect(
+    tag,
+    Effect.gen(function* () {
+      const mutationContext = yield* ReplicaApplyContext;
+      const storage = yield* indexedDbStorage(options.schema, { key: options.key });
+      return yield* make({
+        initialValue: options.initialValue,
+        storage,
+        mutationContext,
       });
     }),
   ).pipe(Layer.provide(databaseLayer(options.databaseName)));

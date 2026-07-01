@@ -26,6 +26,23 @@ export type MutationFn<TSnapshot, A, TError = never> = (
 
 /**
  * @since 0.0.0
+ * @category model
+ */
+export type MutationPhase = "optimistic" | "accepted" | "rejected";
+
+/**
+ * @since 0.0.0
+ * @category model
+ */
+export interface MutationContext {
+  readonly current: Effect.Effect<{
+    readonly phase: MutationPhase;
+    readonly eventId: string;
+  }>;
+}
+
+/**
+ * @since 0.0.0
  * @category service-interface
  */
 export interface IProjection<TSnapshot, TError = never> {
@@ -92,6 +109,7 @@ export function make<
 >(options: {
   readonly initialValue: TSnapshot;
   readonly storage?: TStorage;
+  readonly mutationContext?: MutationContext;
 }): Effect.Effect<
   IReactiveProjection<TSnapshot, StorageError<TStorage>>,
   StorageError<TStorage>
@@ -130,6 +148,54 @@ export function make<
             persistedSnapshot = snapshot;
           });
 
+    const applyOptimisticMutation = <A>(
+      id: string,
+      f: MutationFn<TSnapshot, A, StorageError<TStorage>>,
+    ) =>
+      Effect.gen(function* () {
+        const [next, value] = yield* runMutationFn(f, ref.value);
+        ref.set(next);
+        optimisticMutations.set(id, f);
+        return value;
+      });
+
+    const removeOptimisticMutation = (id: string) =>
+      Effect.gen(function* () {
+        optimisticMutations.delete(id);
+        const visible = yield* reapplyOptimisticMutations(
+          persistedSnapshot,
+          [...optimisticMutations.values()],
+        );
+        ref.set(visible);
+      });
+
+    const applyAcceptedMutation = <A>(
+      f: MutationFn<TSnapshot, A, StorageError<TStorage>>,
+      optimisticId?: string,
+    ) =>
+      Effect.gen(function* () {
+        if (optimisticId) {
+          optimisticMutations.delete(optimisticId);
+        }
+
+        if (optimisticMutations.size === 0) {
+          const [next, value] = yield* runMutationFn(f, persistedSnapshot);
+          yield* persistSnapshot(next);
+          ref.set(next);
+          return value;
+        }
+
+        const databaseSnapshot = yield* loadPersistedSnapshot();
+        const [next, value] = yield* runMutationFn(f, databaseSnapshot);
+        yield* persistSnapshot(next);
+        const merged = yield* reapplyOptimisticMutations(
+          next,
+          [...optimisticMutations.values()],
+        );
+        ref.set(merged);
+        return value;
+      });
+
     const atom = Atom.make((get) => {
       const unsubscribe = ref.subscribe((snapshot) => {
         get.setSelf(snapshot);
@@ -144,44 +210,25 @@ export function make<
       atom,
       query: (filter) => Effect.sync(() => filter(ref.value)),
       optimisticMutation: (id, f) =>
-        lock.withPermits(1)(
-          Effect.gen(function* () {
-            const [next, value] = yield* runMutationFn(f, ref.value);
-            ref.set(next);
-            optimisticMutations.set(id, f);
-            return value;
-          }),
-        ),
+        lock.withPermits(1)(applyOptimisticMutation(id, f)),
       removeOptimisticMutation: (id) =>
-        lock.withPermits(1)(
-          Effect.gen(function* () {
-            optimisticMutations.delete(id);
-            const visible = yield* reapplyOptimisticMutations(
-              persistedSnapshot,
-              [...optimisticMutations.values()],
-            );
-            ref.set(visible);
-          }),
-        ),
+        lock.withPermits(1)(removeOptimisticMutation(id)),
       mutation: (f) =>
         lock.withPermits(1)(
           Effect.gen(function* () {
-            if (optimisticMutations.size === 0) {
-              const [next, value] = yield* runMutationFn(f, ref.value);
-              yield* persistSnapshot(next);
-              ref.set(next);
-              return value;
+            if (options.mutationContext) {
+              const { eventId, phase } = yield* options.mutationContext.current;
+              if (phase === "optimistic") {
+                return yield* applyOptimisticMutation(eventId, f);
+              }
+              if (phase === "rejected") {
+                yield* removeOptimisticMutation(eventId);
+                return undefined as never;
+              }
+              return yield* applyAcceptedMutation(f, eventId);
             }
 
-            const databaseSnapshot = yield* loadPersistedSnapshot();
-            const [next, value] = yield* runMutationFn(f, databaseSnapshot);
-            yield* persistSnapshot(next);
-            const merged = yield* reapplyOptimisticMutations(
-              next,
-              [...optimisticMutations.values()],
-            );
-            ref.set(merged);
-            return value;
+            return yield* applyAcceptedMutation(f);
           }),
         ),
     };
@@ -204,6 +251,7 @@ export function layer<
   options: {
     readonly initialValue: TSnapshot;
     readonly storage?: TStorage;
+    readonly mutationContext?: MutationContext;
   },
 ): Layer.Layer<TIdentifier, StorageError<TStorage>> {
   return Layer.effect(tag, make(options));
