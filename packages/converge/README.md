@@ -41,4 +41,4 @@ const TodoProjectionLayer = Projection.indexedDbLayer(TodoProjection, {
 });
 ```
 
-Use the handlers in `EventRouter.layer` and provide the projection layer to the sync engine. Framework adapters can read the same projection service; React uses `useProjection(projection)` over the service's Effect Atom.
+Use the handlers in `EventRouter.layer` and provide the projection layer to the sync engine. Framework adapters can read the same projection service; React can subscribe directly with `useAtomValue(projection.atom)`.

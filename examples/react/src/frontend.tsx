@@ -6,8 +6,8 @@
  */
 
 import { StrictMode } from "react";
+import { RegistryProvider } from "@effect/atom-react";
 import { createRoot } from "react-dom/client";
-import { ProjectionRegistryProvider } from "../../../packages/converge/src/projection/index.ts";
 import { App } from "./App";
 import { getTodoProjection } from "./todo-replica";
 
@@ -19,8 +19,8 @@ const todoProjection = await getTodoProjection();
 
 root.render(
   <StrictMode>
-    <ProjectionRegistryProvider>
+    <RegistryProvider>
       <App todoProjection={todoProjection} />
-    </ProjectionRegistryProvider>
+    </RegistryProvider>
   </StrictMode>,
 );

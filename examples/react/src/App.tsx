@@ -1,8 +1,8 @@
 import "./index.css";
+import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useProjection } from "../../../packages/converge/src/projection/index.ts";
 import {
   Card,
   CardContent,
@@ -21,7 +21,7 @@ export function App({
 }: {
   readonly todoProjection: IProjection<ReadonlyArray<Todo>, unknown>;
 }) {
-  const todos = useProjection(todoProjection);
+  const todos = useAtomValue(todoProjection.atom);
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState("Ready");
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);

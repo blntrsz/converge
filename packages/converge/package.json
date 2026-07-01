@@ -8,7 +8,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect/atom-react": "catalog:",
     "@effect/platform-browser": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-pglite": "catalog:",
