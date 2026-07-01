@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { createTodo, deleteTodo, setTodoCompleted, syncTodos } from "./todo-replica";
-import type { IProjection } from "../../../packages/converge/src/projection/index.ts";
+import type { IProjection } from "../../../packages/converge/src/projection/services/projection.ts";
 import type { Todo } from "./todo-events";
 
 export function App({

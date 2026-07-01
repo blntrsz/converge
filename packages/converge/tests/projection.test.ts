@@ -4,7 +4,9 @@ import { Context, Effect, Layer, Schema } from "effect";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { Event, EventHandler, EventInstance } from "../src/index.ts";
-import * as Projection from "../src/projection/index.ts";
+import * as IndexedDbProjection from "../src/projection/layers/indexeddb-projection.ts";
+import * as MemoryProjection from "../src/projection/layers/memory-projection.ts";
+import * as Projection from "../src/projection/services/projection.ts";
 
 const todoCreated = Event.make("todo.created.v1", {
   id: Schema.String,
@@ -81,12 +83,12 @@ const FakeIndexedDbLayer = Layer.succeed(
   IndexedDb.make({ indexedDB, IDBKeyRange }),
 );
 
-const memoryProjectionLayer = Projection.memoryLayer(TodoProjection, {
+const memoryProjectionLayer = MemoryProjection.memoryLayer(TodoProjection, {
   initialValue: [] as ReadonlyArray<Todo>,
 });
 
 const indexedDbProjectionLayer = (databaseName: string) =>
-  Projection.indexedDbLayer(TodoProjection, {
+  IndexedDbProjection.indexedDbLayer(TodoProjection, {
     databaseName,
     key: "todos",
     schema: TodoListSchema,
@@ -187,13 +189,13 @@ describe("Projection", () => {
       const layer = indexedDbProjectionLayer(databaseName);
 
       yield* Effect.gen(function* () {
-        const api = yield* Projection.ProjectionDatabase.getQueryBuilder;
+        const api = yield* IndexedDbProjection.ProjectionDatabase.getQueryBuilder;
         yield* api.from("projection_snapshots").upsert({
           key: "todos",
           snapshot: [{ id: 1, title: "Invalid" }],
         });
       }).pipe(
-        Effect.provide(Projection.databaseLayer(databaseName)),
+        Effect.provide(IndexedDbProjection.databaseLayer(databaseName)),
         Effect.provide(FakeIndexedDbLayer),
       );
 

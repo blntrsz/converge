@@ -19,6 +19,9 @@ This project was created using `bun init` in bun v1.3.13. [Bun](https://bun.com)
 Projection services expose typed read/write snapshots. Event handlers update projections through Effect DI, so one handler can write one or more projections and the sync engine receives ordinary Converge handlers.
 
 ```ts
+import * as IndexedDbProjection from "converge/projection/layers/indexeddb-projection";
+import * as Projection from "converge/projection/services/projection";
+
 class TodoProjection extends Context.Service<
   TodoProjection,
   Projection.IProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
@@ -33,7 +36,7 @@ const todoCreatedHandler = EventHandler.make(
   }),
 );
 
-const TodoProjectionLayer = Projection.indexedDbLayer(TodoProjection, {
+const TodoProjectionLayer = IndexedDbProjection.indexedDbLayer(TodoProjection, {
   databaseName: "todo-projections",
   key: "todos",
   schema: TodoListSchema,

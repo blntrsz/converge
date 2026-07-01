@@ -4,7 +4,8 @@ import * as EventHandler from "../../../packages/converge/src/event/event-handle
 import * as EventInstance from "../../../packages/converge/src/event/event-instance.ts";
 import * as EventRouter from "../../../packages/converge/src/event/event-router.ts";
 import * as HttpPrimarySyncEngine from "../../../packages/converge/src/primary-sync-engine/layers/http-primary-sync-engine.ts";
-import * as Projection from "../../../packages/converge/src/projection/index.ts";
+import * as IndexedDbProjection from "../../../packages/converge/src/projection/layers/indexeddb-projection.ts";
+import * as Projection from "../../../packages/converge/src/projection/services/projection.ts";
 import * as IndexedDbReplicaSyncEngine from "../../../packages/converge/src/replica-sync-engine/layers/indexeddb-replica-sync-engine.ts";
 import * as ReplicaSyncEngine from "../../../packages/converge/src/replica-sync-engine/services/replica-sync-engine.ts";
 import {
@@ -83,7 +84,7 @@ const ReplicaEventRouterLayer = EventRouter.layer({
   handlers: [replicaTodoCreatedHandler, replicaTodoCompletionSetHandler, replicaTodoDeletedHandler],
 });
 
-const TodoProjectionLayer = Projection.indexedDbLayer(TodoProjection, {
+const TodoProjectionLayer = IndexedDbProjection.indexedDbLayer(TodoProjection, {
   databaseName: "converge-react-todos-projection",
   key: projectionStorageKey,
   schema: TodoListSchema,
