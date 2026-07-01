@@ -216,7 +216,7 @@ describe("Projection", () => {
           undefined,
         ] as const);
 
-        yield* projection.optimisticMutation(() => [
+        yield* projection.optimisticMutation("event-2", () => [
           [
             { id: "1", title: "Persisted", completed: false, createdAt: 1 },
             { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
@@ -260,7 +260,7 @@ describe("Projection", () => {
           undefined,
         ] as const;
 
-      yield* projection.optimisticMutation(addOptimisticTodo);
+      yield* projection.optimisticMutation("event-2", addOptimisticTodo);
 
       yield* projection.mutation(() => [
         [
@@ -275,6 +275,32 @@ describe("Projection", () => {
         { id: "1", title: "Persisted", completed: false, createdAt: 1 },
         { id: "3", title: "Server", completed: false, createdAt: 3 },
         { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
+      ]);
+    }).pipe(Effect.provide(memoryProjectionLayer)),
+  );
+
+  it.effect("removes an optimistic mutation from the visible snapshot", () =>
+    Effect.gen(function* () {
+      const projection = yield* TodoProjection;
+
+      yield* projection.mutation(() => [
+        [{ id: "1", title: "Persisted", completed: false, createdAt: 1 }],
+        undefined,
+      ] as const);
+
+      yield* projection.optimisticMutation("event-2", (todos) => [
+        [
+          ...todos,
+          { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
+        ],
+        undefined,
+      ] as const);
+
+      yield* projection.removeOptimisticMutation("event-2");
+
+      const visible = yield* projection.query((todos) => todos);
+      assert.deepStrictEqual(visible, [
+        { id: "1", title: "Persisted", completed: false, createdAt: 1 },
       ]);
     }).pipe(Effect.provide(memoryProjectionLayer)),
   );

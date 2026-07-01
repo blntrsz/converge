@@ -3,7 +3,11 @@ import { Context, Effect, Layer, ManagedRuntime } from "effect";
 import { EventHandler, EventInstance, EventRouter } from "converge/event";
 import { HttpPrimarySyncEngine } from "converge/primary-sync-engine";
 import { IndexedDbProjection, Projection } from "converge/projection";
-import { IndexedDbReplicaSyncEngine, ReplicaSyncEngine } from "converge/replica-sync-engine";
+import {
+  IndexedDbReplicaSyncEngine,
+  ReplicaApplyContext,
+  ReplicaSyncEngine,
+} from "converge/replica-sync-engine";
 import {
   todoCompletionSet,
   todoCreated,
@@ -26,8 +30,10 @@ const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
+    const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
+    const { eventId, phase } = yield* applyContext.current;
 
-    yield* todosProjection.mutation((todos) => {
+    const applyTodoCreated = (todos: ReadonlyArray<Todo>) => {
       if (todos.some((todo) => todo.id === event.eventDetails.id)) {
         return [todos, undefined] as const;
       }
@@ -44,7 +50,16 @@ const replicaTodoCreatedHandler = EventHandler.make(
         ]),
         undefined,
       ] as const;
-    });
+    };
+
+    if (phase === "optimistic") {
+      yield* todosProjection.optimisticMutation(eventId, applyTodoCreated);
+    } else if (phase === "accepted") {
+      yield* todosProjection.mutation(applyTodoCreated);
+      yield* todosProjection.removeOptimisticMutation(eventId);
+    } else {
+      yield* todosProjection.removeOptimisticMutation(eventId);
+    }
   }),
 );
 
@@ -52,15 +67,26 @@ const replicaTodoCompletionSetHandler = EventHandler.make(
   todoCompletionSet,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
+    const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
+    const { eventId, phase } = yield* applyContext.current;
 
-    yield* todosProjection.mutation((todos) => [
+    const applyTodoCompletionSet = (todos: ReadonlyArray<Todo>) => [
       todos.map((todo) =>
         todo.id === event.eventDetails.id
           ? { ...todo, completed: event.eventDetails.completed }
           : todo,
       ),
       undefined,
-    ] as const);
+    ] as const;
+
+    if (phase === "optimistic") {
+      yield* todosProjection.optimisticMutation(eventId, applyTodoCompletionSet);
+    } else if (phase === "accepted") {
+      yield* todosProjection.mutation(applyTodoCompletionSet);
+      yield* todosProjection.removeOptimisticMutation(eventId);
+    } else {
+      yield* todosProjection.removeOptimisticMutation(eventId);
+    }
   }),
 );
 
@@ -68,11 +94,22 @@ const replicaTodoDeletedHandler = EventHandler.make(
   todoDeleted,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
+    const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
+    const { eventId, phase } = yield* applyContext.current;
 
-    yield* todosProjection.mutation((todos) => [
+    const applyTodoDeleted = (todos: ReadonlyArray<Todo>) => [
       todos.filter((todo) => todo.id !== event.eventDetails.id),
       undefined,
-    ] as const);
+    ] as const;
+
+    if (phase === "optimistic") {
+      yield* todosProjection.optimisticMutation(eventId, applyTodoDeleted);
+    } else if (phase === "accepted") {
+      yield* todosProjection.mutation(applyTodoDeleted);
+      yield* todosProjection.removeOptimisticMutation(eventId);
+    } else {
+      yield* todosProjection.removeOptimisticMutation(eventId);
+    }
   }),
 );
 
@@ -98,6 +135,7 @@ const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
 const ReplicaTodoLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provide(ReplicaEventRouterLayer),
   Layer.provide(ReplicaDatabaseLayer),
+  Layer.provideMerge(ReplicaApplyContext.layer),
   Layer.provideMerge(TodoProjectionLayer),
   Layer.provideMerge(HttpPrimarySyncEngineLayer),
 );

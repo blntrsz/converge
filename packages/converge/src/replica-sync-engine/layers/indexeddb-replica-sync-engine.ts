@@ -3,6 +3,7 @@ import { Effect, Layer, Option, Queue, Result, Semaphore, Schema } from "effect"
 import { EventInstance } from "../../event/event-instance.ts";
 import { EventRouterService } from "../../event/event-router.ts";
 import { PrimarySyncEngine } from "../../primary-sync-engine/services/primary-sync-engine.ts";
+import { ReplicaApplyContext, type ApplyPhase } from "../services/apply-context.ts";
 import { ReplicaSyncEngine, type IReplicaSyncEngine } from "../services/replica-sync-engine.ts";
 
 const EventHistoryRow = Schema.Struct({
@@ -127,12 +128,16 @@ const eventFromProposedRow = (row: ProposedEventRow) =>
 export const layer: Layer.Layer<
   ReplicaSyncEngine,
   never,
-  PrimarySyncEngine | EventRouterService | IndexedDbDatabase.IndexedDbDatabase
+  | PrimarySyncEngine
+  | EventRouterService
+  | ReplicaApplyContext
+  | IndexedDbDatabase.IndexedDbDatabase
 > = Layer.effect(
   ReplicaSyncEngine,
   Effect.gen(function* () {
     const primary = yield* PrimarySyncEngine;
     const eventRouter = yield* EventRouterService;
+    const applyContext = yield* ReplicaApplyContext;
     const api = yield* ReplicaSyncEngineDatabase.getQueryBuilder;
     const eventHistory = api.from("event_history");
     const proposedEvents = api.from("proposed_events");
@@ -192,6 +197,17 @@ export const layer: Layer.Layer<
 
     const findHandler = (eventType: string) => eventRouter.find(eventType);
 
+    const runHandler = (event: EventInstance, phase: ApplyPhase) =>
+      Effect.gen(function* () {
+        const handler = findHandler(event.eventType);
+        if (!handler) return;
+
+        yield* applyContext.set({ phase, eventId: event.eventId });
+        yield* handler.run(event).pipe(
+          Effect.ensuring(applyContext.set({ phase: "accepted", eventId: "" })),
+        );
+      }).pipe(Effect.orDie);
+
     const applyLocally = (event: EventInstance) =>
       acceptLock.withPermits(1)(
         Effect.gen(function* () {
@@ -199,13 +215,7 @@ export const layer: Layer.Layer<
           if (Option.isSome(existing)) return;
 
           const proposed = yield* findProposedEvent(event.eventId);
-
-          if (Option.isNone(proposed)) {
-            const handler = findHandler(event.eventType);
-            if (handler) {
-              yield* handler.run(event).pipe(Effect.orDie);
-            }
-          }
+          yield* runHandler(event, "accepted");
 
           yield* appendAcceptedEvent(event);
           if (Option.isSome(proposed)) {
@@ -229,11 +239,7 @@ export const layer: Layer.Layer<
             eventDetails: event.eventDetails as ProposedEventInsert["eventDetails"],
           };
           yield* proposedEvents.insert(row as never).pipe(Effect.asVoid, Effect.orDie);
-
-          const handler = findHandler(event.eventType);
-          if (handler) {
-            yield* handler.run(event).pipe(Effect.orDie);
-          }
+          yield* runHandler(event, "optimistic");
         }),
       ).pipe(Effect.orDie);
 
@@ -283,10 +289,17 @@ export const layer: Layer.Layer<
         const event = events[index];
         if (!event) continue;
         if (Result.isFailure(result)) {
-          yield* Effect.logWarning(
-            `ReplicaSyncEngine: primary rejected event ${event.eventId}`,
+          yield* acceptLock.withPermits(1)(
+            Effect.gen(function* () {
+              yield* Effect.logWarning(
+                `ReplicaSyncEngine: primary rejected event ${event.eventId}`,
+              );
+              yield* deleteProposedEvent(event.eventId);
+              yield* runHandler(event, "rejected");
+            }),
           );
-          yield* deleteProposedEvent(event.eventId);
+        } else {
+          yield* applyLocally(event);
         }
       }
     });

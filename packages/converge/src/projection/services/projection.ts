@@ -34,8 +34,10 @@ export interface IProjection<TSnapshot, TError = never> {
     f: MutationFn<TSnapshot, A, TError>,
   ) => Effect.Effect<A, TError>;
   readonly optimisticMutation: <A>(
+    id: string,
     f: MutationFn<TSnapshot, A, TError>,
   ) => Effect.Effect<A, TError>;
+  readonly removeOptimisticMutation: (id: string) => Effect.Effect<void, TError>;
 }
 
 /**
@@ -100,7 +102,10 @@ export function make<
     const ref = AtomRef.make(hydrated);
     const lock = yield* Semaphore.make(1);
     let persistedSnapshot = hydrated;
-    const optimisticMutations: Array<MutationFn<TSnapshot, unknown, StorageError<TStorage>>> = [];
+    const optimisticMutations = new Map<
+      string,
+      MutationFn<TSnapshot, unknown, StorageError<TStorage>>
+    >();
 
     const loadPersistedSnapshot = (): Effect.Effect<
       TSnapshot,
@@ -138,19 +143,30 @@ export function make<
     return {
       atom,
       query: (filter) => Effect.sync(() => filter(ref.value)),
-      optimisticMutation: (f) =>
+      optimisticMutation: (id, f) =>
         lock.withPermits(1)(
           Effect.gen(function* () {
             const [next, value] = yield* runMutationFn(f, ref.value);
             ref.set(next);
-            optimisticMutations.push(f);
+            optimisticMutations.set(id, f);
             return value;
+          }),
+        ),
+      removeOptimisticMutation: (id) =>
+        lock.withPermits(1)(
+          Effect.gen(function* () {
+            optimisticMutations.delete(id);
+            const visible = yield* reapplyOptimisticMutations(
+              persistedSnapshot,
+              [...optimisticMutations.values()],
+            );
+            ref.set(visible);
           }),
         ),
       mutation: (f) =>
         lock.withPermits(1)(
           Effect.gen(function* () {
-            if (optimisticMutations.length === 0) {
+            if (optimisticMutations.size === 0) {
               const [next, value] = yield* runMutationFn(f, ref.value);
               yield* persistSnapshot(next);
               ref.set(next);
@@ -160,7 +176,10 @@ export function make<
             const databaseSnapshot = yield* loadPersistedSnapshot();
             const [next, value] = yield* runMutationFn(f, databaseSnapshot);
             yield* persistSnapshot(next);
-            const merged = yield* reapplyOptimisticMutations(next, optimisticMutations);
+            const merged = yield* reapplyOptimisticMutations(
+              next,
+              [...optimisticMutations.values()],
+            );
             ref.set(merged);
             return value;
           }),
