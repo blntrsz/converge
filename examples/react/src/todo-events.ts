@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import * as Event from "../../../packages/converge/src/event/event.ts";
+import { Event } from "converge/event";
 
 export const todoCreated = Event.make("todo.created.v1", {
   id: Schema.String,

@@ -21,6 +21,7 @@
         "@effect/atom-react": "catalog:",
         "@effect/platform-browser": "catalog:",
         "bun-plugin-tailwind": "^0.1.2",
+        "converge": "workspace:*",
         "effect": "catalog:",
         "react": "^19",
         "react-dom": "^19",

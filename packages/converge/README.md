@@ -19,8 +19,8 @@ This project was created using `bun init` in bun v1.3.13. [Bun](https://bun.com)
 Projection services expose `query`, `mutation`, and `optimisticMutation` over typed snapshots. Event handlers update projections through Effect DI, so one handler can write one or more projections and the sync engine receives ordinary Converge handlers.
 
 ```ts
-import * as IndexedDbProjection from "converge/projection/layers/indexeddb-projection";
-import * as Projection from "converge/projection/services/projection";
+import { EventHandler } from "converge/event";
+import { IndexedDbProjection, Projection } from "converge/projection";
 
 class TodoProjection extends Context.Service<
   TodoProjection,

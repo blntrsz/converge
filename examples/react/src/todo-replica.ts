@@ -1,13 +1,9 @@
 import { IndexedDb } from "@effect/platform-browser";
 import { Context, Effect, Layer, ManagedRuntime } from "effect";
-import * as EventHandler from "../../../packages/converge/src/event/event-handler.ts";
-import * as EventInstance from "../../../packages/converge/src/event/event-instance.ts";
-import * as EventRouter from "../../../packages/converge/src/event/event-router.ts";
-import * as HttpPrimarySyncEngine from "../../../packages/converge/src/primary-sync-engine/layers/http-primary-sync-engine.ts";
-import * as IndexedDbProjection from "../../../packages/converge/src/projection/layers/indexeddb-projection.ts";
-import * as Projection from "../../../packages/converge/src/projection/services/projection.ts";
-import * as IndexedDbReplicaSyncEngine from "../../../packages/converge/src/replica-sync-engine/layers/indexeddb-replica-sync-engine.ts";
-import * as ReplicaSyncEngine from "../../../packages/converge/src/replica-sync-engine/services/replica-sync-engine.ts";
+import { EventHandler, EventInstance, EventRouter } from "converge/event";
+import { HttpPrimarySyncEngine } from "converge/primary-sync-engine";
+import { IndexedDbProjection, Projection } from "converge/projection";
+import { IndexedDbReplicaSyncEngine, ReplicaSyncEngine } from "converge/replica-sync-engine";
 import {
   todoCompletionSet,
   todoCreated,

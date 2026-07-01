@@ -2,7 +2,14 @@
   "name": "converge",
   "private": true,
   "type": "module",
-  "module": "index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./event": "./src/event/index.ts",
+    "./primary-sync-engine": "./src/primary-sync-engine/index.ts",
+    "./projection": "./src/projection/index.ts",
+    "./replica-sync-engine": "./src/replica-sync-engine/index.ts",
+    "./pglite-client": "./src/pglite-client.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

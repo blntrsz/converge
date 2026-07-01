@@ -13,10 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { createTodo, deleteTodo, setTodoCompleted, syncTodos } from "./todo-replica";
-import type {
-  IReactiveProjection,
-  ProjectionStorageError,
-} from "../../../packages/converge/src/projection/services/projection.ts";
+import type { IReactiveProjection, ProjectionStorageError } from "converge/projection";
 import type { Todo } from "./todo-events";
 
 export function App({

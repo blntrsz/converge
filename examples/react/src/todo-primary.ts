@@ -1,10 +1,9 @@
 import { Effect, Layer } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
-import * as EventHandler from "../../../packages/converge/src/event/event-handler.ts";
-import * as EventRouter from "../../../packages/converge/src/event/event-router.ts";
-import * as PostgresPrimarySyncEngine from "../../../packages/converge/src/primary-sync-engine/layers/postgres-primary-sync-engine.ts";
-import { PgliteSqlClient } from "../../../packages/converge/src/pglite-client.ts";
+import { EventHandler, EventRouter } from "converge/event";
+import { PostgresPrimarySyncEngine } from "converge/primary-sync-engine";
+import { PgliteSqlClient } from "converge/pglite-client";
 import {
   todoCompletionSet,
   todoCreated,

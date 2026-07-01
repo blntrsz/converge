@@ -4,9 +4,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { Event, EventHandler, EventInstance } from "../src/index.ts";
-import * as IndexedDbProjection from "../src/projection/layers/indexeddb-projection.ts";
-import * as MemoryProjection from "../src/projection/layers/memory-projection.ts";
-import * as Projection from "../src/projection/services/projection.ts";
+import { IndexedDbProjection, MemoryProjection, Projection } from "converge/projection";
 
 const todoCreated = Event.make("todo.created.v1", {
   id: Schema.String,
