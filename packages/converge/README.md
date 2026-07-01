@@ -16,7 +16,7 @@ This project was created using `bun init` in bun v1.3.13. [Bun](https://bun.com)
 
 ## React projections
 
-Projection services expose typed read/write snapshots. Event handlers update projections through Effect DI, so one handler can write one or more projections and the sync engine receives ordinary Converge handlers.
+Projection services expose `query`, `mutation`, and `optimisticMutation` over typed snapshots. Event handlers update projections through Effect DI, so one handler can write one or more projections and the sync engine receives ordinary Converge handlers.
 
 ```ts
 import * as IndexedDbProjection from "converge/projection/layers/indexeddb-projection";
@@ -24,15 +24,15 @@ import * as Projection from "converge/projection/services/projection";
 
 class TodoProjection extends Context.Service<
   TodoProjection,
-  Projection.IProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+  Projection.IReactiveProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
 >()("TodoProjection") {}
 
 const todoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const todos = yield* TodoProjection;
-    const snapshot = yield* todos.get;
-    yield* todos.set([...snapshot, event.eventDetails]);
+    const snapshot = yield* todos.query((items) => items);
+    yield* todos.mutation(() => [[...snapshot, event.eventDetails], undefined] as const);
   }),
 );
 

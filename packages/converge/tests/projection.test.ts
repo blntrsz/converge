@@ -32,7 +32,7 @@ type Todo = Schema.Schema.Type<typeof TodoSchema>;
 
 class TodoProjection extends Context.Service<
   TodoProjection,
-  Projection.IProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+  Projection.IReactiveProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
 >()("TodoProjection") {}
 
 const sortTodos = (todos: ReadonlyArray<Todo>) =>
@@ -42,23 +42,25 @@ const todoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const projection = yield* TodoProjection;
-    const todos = yield* projection.get;
 
-    if (todos.some((todo) => todo.id === event.eventDetails.id)) {
-      return;
-    }
+    yield* projection.mutation((todos) => {
+      if (todos.some((todo) => todo.id === event.eventDetails.id)) {
+        return [todos, undefined] as const;
+      }
 
-    yield* projection.set(
-      sortTodos([
-        ...todos,
-        {
-          id: event.eventDetails.id,
-          title: event.eventDetails.title,
-          completed: false,
-          createdAt: event.eventDetails.createdAt,
-        },
-      ]),
-    );
+      return [
+        sortTodos([
+          ...todos,
+          {
+            id: event.eventDetails.id,
+            title: event.eventDetails.title,
+            completed: false,
+            createdAt: event.eventDetails.createdAt,
+          },
+        ]),
+        undefined,
+      ] as const;
+    });
   }),
 );
 
@@ -66,15 +68,15 @@ const todoCompletionSetHandler = EventHandler.make(
   todoCompletionSet,
   Effect.fn(function* (event) {
     const projection = yield* TodoProjection;
-    const todos = yield* projection.get;
 
-    yield* projection.set(
+    yield* projection.mutation((todos) => [
       todos.map((todo) =>
         todo.id === event.eventDetails.id
           ? { ...todo, completed: event.eventDetails.completed }
           : todo,
       ),
-    );
+      undefined,
+    ] as const);
   }),
 );
 
@@ -107,7 +109,7 @@ describe("Projection", () => {
       yield* todoCreatedHandler.run(event);
 
       const projection = yield* TodoProjection;
-      const snapshot = yield* projection.get;
+      const snapshot = yield* projection.query((todos) => todos);
 
       assert.deepStrictEqual(snapshot, [
         { id: "1", title: "Buy milk", completed: false, createdAt: 1 },
@@ -115,13 +117,9 @@ describe("Projection", () => {
     }).pipe(Effect.provide(memoryProjectionLayer)),
   );
 
-  it.effect("notifies subscribers and updates the Effect Atom", () =>
+  it.effect("updates the Effect Atom on mutation", () =>
     Effect.gen(function* () {
       const projection = yield* TodoProjection;
-      let notifications = 0;
-      const unsubscribeProjection = yield* projection.subscribe(() => {
-        notifications += 1;
-      });
       const registry = AtomRegistry.make({
         scheduleTask: (run) => {
           run();
@@ -140,12 +138,10 @@ describe("Projection", () => {
 
       yield* todoCreatedHandler.run(event);
 
-      assert.strictEqual(notifications, 1);
       assert.deepStrictEqual(registry.get(projection.atom), [
         { id: "1", title: "Buy milk", completed: false, createdAt: 1 },
       ]);
 
-      unsubscribeProjection();
       unsubscribeAtom();
       registry.dispose();
     }).pipe(Effect.provide(memoryProjectionLayer)),
@@ -174,7 +170,7 @@ describe("Projection", () => {
 
       const hydrated = yield* Effect.gen(function* () {
         const projection = yield* TodoProjection;
-        return yield* projection.get;
+        return yield* projection.query((todos) => todos);
       }).pipe(Effect.provide(readLayer));
 
       assert.deepStrictEqual(hydrated, [
@@ -201,10 +197,87 @@ describe("Projection", () => {
 
       const snapshot = yield* Effect.gen(function* () {
         const projection = yield* TodoProjection;
-        return yield* projection.get;
+        return yield* projection.query((todos) => todos);
       }).pipe(Effect.provide(layer));
 
       assert.deepStrictEqual(snapshot, []);
     }),
+  );
+
+  it.effect("keeps optimistic mutations in memory without persisting them", () =>
+    Effect.gen(function* () {
+      const databaseName = `projection-optimistic-${Date.now()}-${Math.random()}`;
+      const writeLayer = indexedDbProjectionLayer(databaseName);
+      const readLayer = indexedDbProjectionLayer(databaseName);
+
+      yield* Effect.gen(function* () {
+        const projection = yield* TodoProjection;
+
+        yield* projection.mutation(() => [
+          [{ id: "1", title: "Persisted", completed: false, createdAt: 1 }],
+          undefined,
+        ] as const);
+
+        yield* projection.optimisticMutation(() => [
+          [
+            { id: "1", title: "Persisted", completed: false, createdAt: 1 },
+            { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
+          ],
+          undefined,
+        ] as const);
+
+        const visible = yield* projection.query((todos) => todos);
+        assert.deepStrictEqual(visible, [
+          { id: "1", title: "Persisted", completed: false, createdAt: 1 },
+          { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
+        ]);
+      }).pipe(Effect.provide(writeLayer));
+
+      const hydrated = yield* Effect.gen(function* () {
+        const projection = yield* TodoProjection;
+        return yield* projection.query((todos) => todos);
+      }).pipe(Effect.provide(readLayer));
+
+      assert.deepStrictEqual(hydrated, [
+        { id: "1", title: "Persisted", completed: false, createdAt: 1 },
+      ]);
+    }),
+  );
+
+  it.effect("reconciles optimistic mutations after a normal mutation", () =>
+    Effect.gen(function* () {
+      const projection = yield* TodoProjection;
+
+      yield* projection.mutation(() => [
+        [{ id: "1", title: "Persisted", completed: false, createdAt: 1 }],
+        undefined,
+      ] as const);
+
+      const addOptimisticTodo = (todos: ReadonlyArray<Todo>) =>
+        [
+          [
+            ...todos,
+            { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
+          ],
+          undefined,
+        ] as const;
+
+      yield* projection.optimisticMutation(addOptimisticTodo);
+
+      yield* projection.mutation(() => [
+        [
+          { id: "1", title: "Persisted", completed: false, createdAt: 1 },
+          { id: "3", title: "Server", completed: false, createdAt: 3 },
+        ],
+        undefined,
+      ] as const);
+
+      const visible = yield* projection.query((todos) => todos);
+      assert.deepStrictEqual(visible, [
+        { id: "1", title: "Persisted", completed: false, createdAt: 1 },
+        { id: "3", title: "Server", completed: false, createdAt: 3 },
+        { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
+      ]);
+    }).pipe(Effect.provide(memoryProjectionLayer)),
   );
 });

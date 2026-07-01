@@ -8,7 +8,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect";
 import {
   make,
   ProjectionStorageError,
-  type IProjection,
+  type IReactiveProjection,
   type ProjectionStorage,
 } from "../services/projection.ts";
 
@@ -138,7 +138,7 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
 export function indexedDbLayer<TIdentifier, const TSchema extends Schema.Schema<any>>(
   tag: Context.Service<
     TIdentifier,
-    IProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError>
+    IReactiveProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError>
   >,
   options: {
     readonly databaseName?: string;

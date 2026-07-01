@@ -20,7 +20,7 @@ const projectionStorageKey = "converge-react.todos";
 
 export class TodoProjection extends Context.Service<
   TodoProjection,
-  Projection.IProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+  Projection.IReactiveProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
 >()("TodoProjection") {}
 
 const sortTodos = (todos: ReadonlyArray<Todo>) =>
@@ -30,23 +30,25 @@ const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
-    const todos = yield* todosProjection.get;
 
-    if (todos.some((todo) => todo.id === event.eventDetails.id)) {
-      return;
-    }
+    yield* todosProjection.mutation((todos) => {
+      if (todos.some((todo) => todo.id === event.eventDetails.id)) {
+        return [todos, undefined] as const;
+      }
 
-    yield* todosProjection.set(
-      sortTodos([
-        ...todos,
-        {
-          id: event.eventDetails.id,
-          title: event.eventDetails.title,
-          completed: false,
-          createdAt: event.eventDetails.createdAt,
-        },
-      ]),
-    );
+      return [
+        sortTodos([
+          ...todos,
+          {
+            id: event.eventDetails.id,
+            title: event.eventDetails.title,
+            completed: false,
+            createdAt: event.eventDetails.createdAt,
+          },
+        ]),
+        undefined,
+      ] as const;
+    });
   }),
 );
 
@@ -54,15 +56,15 @@ const replicaTodoCompletionSetHandler = EventHandler.make(
   todoCompletionSet,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
-    const todos = yield* todosProjection.get;
 
-    yield* todosProjection.set(
+    yield* todosProjection.mutation((todos) => [
       todos.map((todo) =>
         todo.id === event.eventDetails.id
           ? { ...todo, completed: event.eventDetails.completed }
           : todo,
       ),
-    );
+      undefined,
+    ] as const);
   }),
 );
 
@@ -70,9 +72,11 @@ const replicaTodoDeletedHandler = EventHandler.make(
   todoDeleted,
   Effect.fn(function* (event) {
     const todosProjection = yield* TodoProjection;
-    const todos = yield* todosProjection.get;
 
-    yield* todosProjection.set(todos.filter((todo) => todo.id !== event.eventDetails.id));
+    yield* todosProjection.mutation((todos) => [
+      todos.filter((todo) => todo.id !== event.eventDetails.id),
+      undefined,
+    ] as const);
   }),
 );
 

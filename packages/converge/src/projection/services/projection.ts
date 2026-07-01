@@ -1,6 +1,7 @@
-import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Effect, Layer, Option, Schema, Semaphore } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AtomRef from "effect/unstable/reactivity/AtomRef";
+import type { Context } from "effect";
 
 /**
  * @since 0.0.0
@@ -17,13 +18,33 @@ export class ProjectionStorageError extends Schema.TaggedErrorClass<ProjectionSt
 
 /**
  * @since 0.0.0
+ * @category model
+ */
+export type MutationFn<TSnapshot, A, TError = never> = (
+  current: TSnapshot,
+) => readonly [TSnapshot, A] | Effect.Effect<readonly [TSnapshot, A], TError>;
+
+/**
+ * @since 0.0.0
  * @category service-interface
  */
 export interface IProjection<TSnapshot, TError = never> {
+  readonly query: <A>(filter: (current: TSnapshot) => A) => Effect.Effect<A>;
+  readonly mutation: <A>(
+    f: MutationFn<TSnapshot, A, TError>,
+  ) => Effect.Effect<A, TError>;
+  readonly optimisticMutation: <A>(
+    f: MutationFn<TSnapshot, A, TError>,
+  ) => Effect.Effect<A, TError>;
+}
+
+/**
+ * @since 0.0.0
+ * @category service-interface
+ */
+export interface IReactiveProjection<TSnapshot, TError = never>
+  extends IProjection<TSnapshot, TError> {
   readonly atom: Atom.Atom<TSnapshot>;
-  readonly get: Effect.Effect<TSnapshot>;
-  readonly set: (snapshot: TSnapshot) => Effect.Effect<void, TError>;
-  readonly subscribe: (listener: () => void) => Effect.Effect<() => void>;
 }
 
 /**
@@ -38,6 +59,27 @@ export interface ProjectionStorage<TSnapshot, TError = never> {
 type StorageError<TStorage> =
   TStorage extends ProjectionStorage<any, infer TError> ? TError : never;
 
+const runMutationFn = <TSnapshot, A, TError>(
+  f: MutationFn<TSnapshot, A, TError>,
+  current: TSnapshot,
+): Effect.Effect<readonly [TSnapshot, A], TError> => {
+  const result = f(current);
+  return Effect.isEffect(result) ? result : Effect.succeed(result);
+};
+
+const reapplyOptimisticMutations = <TSnapshot, TError>(
+  base: TSnapshot,
+  mutations: ReadonlyArray<MutationFn<TSnapshot, unknown, TError>>,
+): Effect.Effect<TSnapshot, TError> =>
+  Effect.gen(function* () {
+    let current = base;
+    for (const mutation of mutations) {
+      const [next] = yield* runMutationFn(mutation, current);
+      current = next;
+    }
+    return current;
+  });
+
 /**
  * @since 0.0.0
  * @category constructor
@@ -48,22 +90,40 @@ export function make<
 >(options: {
   readonly initialValue: TSnapshot;
   readonly storage?: TStorage;
-}): Effect.Effect<IProjection<TSnapshot, StorageError<TStorage>>, StorageError<TStorage>> {
+}): Effect.Effect<
+  IReactiveProjection<TSnapshot, StorageError<TStorage>>,
+  StorageError<TStorage>
+> {
   return Effect.gen(function* () {
     const storedSnapshot = options.storage ? yield* options.storage.load : Option.none<TSnapshot>();
-    const ref = AtomRef.make(Option.getOrElse(storedSnapshot, () => options.initialValue));
+    const hydrated = Option.getOrElse(storedSnapshot, () => options.initialValue);
+    const ref = AtomRef.make(hydrated);
     const lock = yield* Semaphore.make(1);
+    let persistedSnapshot = hydrated;
+    const optimisticMutations: Array<MutationFn<TSnapshot, unknown, StorageError<TStorage>>> = [];
 
-    const commit = (snapshot: TSnapshot) =>
-      Effect.gen(function* () {
-        if (options.storage) {
-          yield* options.storage.save(snapshot);
-        }
+    const loadPersistedSnapshot = (): Effect.Effect<
+      TSnapshot,
+      StorageError<TStorage>
+    > =>
+      options.storage
+        ? options.storage.load.pipe(
+            Effect.map((snapshot) => Option.getOrElse(snapshot, () => persistedSnapshot)),
+          )
+        : Effect.succeed(persistedSnapshot);
 
-        yield* Effect.sync(() => {
-          ref.set(snapshot);
-        });
-      });
+    const persistSnapshot = (snapshot: TSnapshot) =>
+      options.storage
+        ? options.storage.save(snapshot).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                persistedSnapshot = snapshot;
+              }),
+            ),
+          )
+        : Effect.sync(() => {
+            persistedSnapshot = snapshot;
+          });
 
     const atom = Atom.make((get) => {
       const unsubscribe = ref.subscribe((snapshot) => {
@@ -77,9 +137,34 @@ export function make<
 
     return {
       atom,
-      get: Effect.sync(() => ref.value),
-      set: (snapshot) => lock.withPermits(1)(commit(snapshot)),
-      subscribe: (listener) => Effect.sync(() => ref.subscribe(() => listener())),
+      query: (filter) => Effect.sync(() => filter(ref.value)),
+      optimisticMutation: (f) =>
+        lock.withPermits(1)(
+          Effect.gen(function* () {
+            const [next, value] = yield* runMutationFn(f, ref.value);
+            ref.set(next);
+            optimisticMutations.push(f);
+            return value;
+          }),
+        ),
+      mutation: (f) =>
+        lock.withPermits(1)(
+          Effect.gen(function* () {
+            if (optimisticMutations.length === 0) {
+              const [next, value] = yield* runMutationFn(f, ref.value);
+              yield* persistSnapshot(next);
+              ref.set(next);
+              return value;
+            }
+
+            const databaseSnapshot = yield* loadPersistedSnapshot();
+            const [next, value] = yield* runMutationFn(f, databaseSnapshot);
+            yield* persistSnapshot(next);
+            const merged = yield* reapplyOptimisticMutations(next, optimisticMutations);
+            ref.set(merged);
+            return value;
+          }),
+        ),
     };
   });
 }
@@ -93,7 +178,10 @@ export function layer<
   TSnapshot,
   TStorage extends ProjectionStorage<TSnapshot, any> | undefined = undefined,
 >(
-  tag: Context.Service<TIdentifier, IProjection<TSnapshot, StorageError<TStorage>>>,
+  tag: Context.Service<
+    TIdentifier,
+    IReactiveProjection<TSnapshot, StorageError<TStorage>>
+  >,
   options: {
     readonly initialValue: TSnapshot;
     readonly storage?: TStorage;
