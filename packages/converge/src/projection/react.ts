@@ -1,13 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { Projection } from "./projection";
+import type { IProjection } from "./projection";
 
 /**
  * @since 0.0.0
  * @category hook
  */
-export function useProjection<TSnapshot>(
-  projection: Projection<TSnapshot, ReadonlyArray<any>, any>,
-): TSnapshot {
+export function useProjection<TSnapshot>(projection: IProjection<TSnapshot, any>): TSnapshot {
   return useAtomValue(projection.atom);
 }
 
@@ -16,7 +14,7 @@ export function useProjection<TSnapshot>(
  * @category hook
  */
 export function useProjectionSelector<TSnapshot, TSelected>(
-  projection: Projection<TSnapshot, ReadonlyArray<any>, any>,
+  projection: IProjection<TSnapshot, any>,
   selector: (snapshot: TSnapshot) => TSelected,
 ): TSelected {
   return useAtomValue(projection.atom, selector);

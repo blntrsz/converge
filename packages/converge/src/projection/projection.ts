@@ -1,9 +1,12 @@
-import { Effect, Option, Schema } from "effect";
+import {
+  IndexedDb,
+  IndexedDbDatabase,
+  IndexedDbTable,
+  IndexedDbVersion,
+} from "@effect/platform-browser";
+import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AtomRef from "effect/unstable/reactivity/AtomRef";
-import * as Event from "../event/event";
-import * as EventHandler from "../event/event-handler";
-import * as EventInstance from "../event/event-instance";
 
 /**
  * @since 0.0.0
@@ -12,11 +15,23 @@ import * as EventInstance from "../event/event-instance";
 export class ProjectionStorageError extends Schema.TaggedErrorClass<ProjectionStorageError>()(
   "ProjectionStorageError",
   {
-    operation: Schema.Literals(["resolve", "encode", "save"]),
+    operation: Schema.Literals(["load", "encode", "save"]),
     key: Schema.String,
     cause: Schema.Unknown,
   },
 ) {}
+
+/**
+ * @since 0.0.0
+ * @category service-interface
+ */
+export interface IProjection<TSnapshot, TError = never> {
+  readonly atom: Atom.Atom<TSnapshot>;
+  readonly get: Effect.Effect<TSnapshot>;
+  readonly set: (snapshot: TSnapshot) => Effect.Effect<void, TError>;
+  readonly update: (f: (snapshot: TSnapshot) => TSnapshot) => Effect.Effect<void, TError>;
+  readonly subscribe: (listener: () => void) => Effect.Effect<() => void>;
+}
 
 /**
  * @since 0.0.0
@@ -27,302 +42,237 @@ export interface ProjectionStorage<TSnapshot, TError = never> {
   readonly save: (snapshot: TSnapshot) => Effect.Effect<void, TError>;
 }
 
-/**
- * @since 0.0.0
- * @category model
- */
-export interface ProjectionKeyValueStorage {
-  readonly getItem: (key: string) => string | null;
-  readonly setItem: (key: string, value: string) => void;
-}
-
-/**
- * @since 0.0.0
- * @category model
- */
-export interface ProjectionReducer<
-  TSnapshot,
-  TProjectionEvent extends Event.AnyEvent,
-  TError,
-  TContext,
-> {
-  readonly event: TProjectionEvent;
-  readonly reduce: (
-    snapshot: TSnapshot,
-    event: EventInstance.EventInstance<EventType<TProjectionEvent>, EventDetails<TProjectionEvent>>,
-  ) => Effect.Effect<TSnapshot, TError, TContext>;
-}
-
-type AnyProjectionReducer<TSnapshot> = ProjectionReducer<TSnapshot, Event.AnyEvent, any, any>;
-
-type EventType<TProjectionEvent> =
-  TProjectionEvent extends Event.Event<infer TEventType, any> ? TEventType : never;
-
-type EventDetails<TProjectionEvent> =
-  TProjectionEvent extends Event.Event<any, infer TEventDetails> ? TEventDetails : never;
-
-type ReducerError<TReducer> =
-  TReducer extends ProjectionReducer<any, any, infer TError, any> ? TError : never;
-
-type ReducerContext<TReducer> =
-  TReducer extends ProjectionReducer<any, any, any, infer TContext> ? TContext : never;
-
 type StorageError<TStorage> =
   TStorage extends ProjectionStorage<any, infer TError> ? TError : never;
-
-type EffectError<TEffect> = TEffect extends Effect.Effect<any, infer TError, any> ? TError : never;
-
-type EffectContext<TEffect> =
-  TEffect extends Effect.Effect<any, any, infer TContext> ? TContext : never;
-
-type ProjectionHandlers<
-  TSnapshot,
-  TReducers extends ReadonlyArray<AnyProjectionReducer<TSnapshot>>,
-  TStorage,
-> = {
-  readonly [TKey in keyof TReducers]: TReducers[TKey] extends ProjectionReducer<
-    TSnapshot,
-    Event.Event<infer TEventType, infer TEventDetails>,
-    infer TError,
-    infer TContext
-  >
-    ? EventHandler.EventHandler<
-        TEventType,
-        TEventDetails,
-        TError | StorageError<TStorage>,
-        TContext
-      >
-    : never;
-};
-
-/**
- * @since 0.0.0
- * @category model
- */
-export interface Projection<
-  TSnapshot,
-  TReducers extends ReadonlyArray<AnyProjectionReducer<TSnapshot>>,
-  TStorage,
-> {
-  readonly name?: string;
-  readonly ref: AtomRef.AtomRef<TSnapshot>;
-  readonly atom: Atom.Atom<TSnapshot>;
-  readonly handlers: ProjectionHandlers<TSnapshot, TReducers, TStorage>;
-  readonly getSnapshot: () => TSnapshot;
-  readonly setSnapshot: (snapshot: TSnapshot) => Effect.Effect<void, StorageError<TStorage>>;
-  readonly apply: (
-    event: EventInstance.EventInstance,
-  ) => Effect.Effect<
-    void,
-    ReducerError<TReducers[number]> | StorageError<TStorage>,
-    ReducerContext<TReducers[number]>
-  >;
-  readonly subscribe: (listener: () => void) => () => void;
-}
-
-/**
- * @since 0.0.0
- * @category constructor
- */
-export function reducer<
-  const TEventType extends string,
-  const TEventDetails extends Schema.Struct.Fields,
-  TSnapshot,
-  TEffect extends Effect.Effect<TSnapshot, any, any>,
->(
-  event: Event.Event<TEventType, TEventDetails>,
-  reduce: (
-    snapshot: TSnapshot,
-    event: EventInstance.EventInstance<TEventType, TEventDetails>,
-  ) => TEffect,
-): ProjectionReducer<
-  TSnapshot,
-  Event.Event<TEventType, TEventDetails>,
-  EffectError<TEffect>,
-  EffectContext<TEffect>
-> {
-  return { event, reduce };
-}
 
 /**
  * @since 0.0.0
  * @category constructor
  */
 export function make<
-  const TSnapshot,
-  const TReducers extends ReadonlyArray<AnyProjectionReducer<TSnapshot>>,
-  const TStorage extends ProjectionStorage<TSnapshot, any> | undefined = undefined,
+  TSnapshot,
+  TStorage extends ProjectionStorage<TSnapshot, any> | undefined,
 >(options: {
-  readonly name?: string;
   readonly initialValue: TSnapshot;
-  readonly reducers: TReducers;
   readonly storage?: TStorage;
-}): Projection<TSnapshot, TReducers, TStorage> {
-  const initialValue: TSnapshot = loadInitialSnapshot<TSnapshot>(
-    options.initialValue,
-    options.storage,
-  );
-  const ref = AtomRef.make(initialValue);
-  const reducerByEventType = new Map(
-    options.reducers.map((projectionReducer) => [
-      projectionReducer.event.eventType,
-      projectionReducer,
-    ]),
-  );
+}): Effect.Effect<IProjection<TSnapshot, StorageError<TStorage>>, StorageError<TStorage>> {
+  return Effect.gen(function* () {
+    const storedSnapshot = options.storage ? yield* options.storage.load : Option.none<TSnapshot>();
+    const ref = AtomRef.make(Option.getOrElse(storedSnapshot, () => options.initialValue));
+    const lock = yield* Semaphore.make(1);
 
-  const setSnapshot = (snapshot: TSnapshot) =>
-    Effect.gen(function* () {
-      if (options.storage) {
-        yield* options.storage.save(snapshot);
-      }
+    const commit = (snapshot: TSnapshot) =>
+      Effect.gen(function* () {
+        if (options.storage) {
+          yield* options.storage.save(snapshot);
+        }
 
-      yield* Effect.sync(() => {
-        ref.set(snapshot);
+        yield* Effect.sync(() => {
+          ref.set(snapshot);
+        });
       });
+
+    const atom = Atom.make((get) => {
+      const unsubscribe = ref.subscribe((snapshot) => {
+        get.setSelf(snapshot);
+      });
+
+      get.addFinalizer(unsubscribe);
+
+      return ref.value;
     });
 
-  const applyReducer = (
-    projectionReducer: AnyProjectionReducer<TSnapshot>,
-    event: EventInstance.EventInstance,
-  ) =>
-    Effect.gen(function* () {
-      const nextSnapshot = yield* projectionReducer.reduce(
-        ref.value,
-        event as EventInstance.EventInstance<any, any>,
-      );
-
-      yield* setSnapshot(nextSnapshot);
-    });
-
-  const atom = Atom.make((get) => {
-    const unsubscribe = ref.subscribe((snapshot) => {
-      get.setSelf(snapshot);
-    });
-
-    get.addFinalizer(unsubscribe);
-
-    return ref.value;
+    return {
+      atom,
+      get: Effect.sync(() => ref.value),
+      set: (snapshot) => lock.withPermits(1)(commit(snapshot)),
+      update: (f) => lock.withPermits(1)(commit(f(ref.value))),
+      subscribe: (listener) => Effect.sync(() => ref.subscribe(() => listener())),
+    };
   });
-
-  return {
-    name: options.name,
-    ref,
-    atom,
-    handlers: options.reducers.map((projectionReducer) =>
-      EventHandler.make(projectionReducer.event, (event) => applyReducer(projectionReducer, event)),
-    ) as ProjectionHandlers<TSnapshot, TReducers, TStorage>,
-    getSnapshot: () => ref.value,
-    setSnapshot,
-    apply: (event) => {
-      const projectionReducer = reducerByEventType.get(event.eventType);
-
-      return projectionReducer ? applyReducer(projectionReducer, event) : Effect.void;
-    },
-    subscribe: (listener) => ref.subscribe(() => listener()),
-  };
 }
+
+/**
+ * @since 0.0.0
+ * @category layer
+ */
+export function layer<
+  TIdentifier,
+  TSnapshot,
+  TStorage extends ProjectionStorage<TSnapshot, any> | undefined = undefined,
+>(
+  tag: Context.Service<TIdentifier, IProjection<TSnapshot, StorageError<TStorage>>>,
+  options: {
+    readonly initialValue: TSnapshot;
+    readonly storage?: TStorage;
+  },
+): Layer.Layer<TIdentifier, StorageError<TStorage>> {
+  return Layer.effect(tag, make(options));
+}
+
+/**
+ * @since 0.0.0
+ * @category layer
+ */
+export function memoryLayer<TIdentifier, TSnapshot, TError = never>(
+  tag: Context.Service<TIdentifier, IProjection<TSnapshot, TError>>,
+  options: {
+    readonly initialValue: TSnapshot;
+  },
+): Layer.Layer<TIdentifier> {
+  return Layer.effect(tag, make(options) as Effect.Effect<IProjection<TSnapshot, TError>>);
+}
+
+const SnapshotRow = Schema.Struct({
+  key: Schema.String,
+  snapshot: Schema.Json,
+});
+
+type SnapshotRow = typeof SnapshotRow.Type;
+
+const SnapshotTable = IndexedDbTable.make({
+  name: "projection_snapshots",
+  schema: SnapshotRow,
+  keyPath: "key",
+  durability: "strict",
+});
+
+const ProjectionDatabaseVersion = IndexedDbVersion.make(SnapshotTable);
+
+/**
+ * @since 0.0.0
+ * @category database
+ */
+export class ProjectionDatabase extends IndexedDbDatabase.make(
+  ProjectionDatabaseVersion,
+  Effect.fn(function* (api) {
+    yield* api.createObjectStore("projection_snapshots");
+  }),
+) {}
+
+/**
+ * @since 0.0.0
+ * @category layer
+ */
+export const databaseLayer = (databaseName = "converge-projections") =>
+  ProjectionDatabase.layer(databaseName);
 
 /**
  * @since 0.0.0
  * @category storage
  */
-export function localStorage<const TSchema extends Schema.Schema<any>>(
+export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
   schema: TSchema & {
     readonly DecodingServices: never;
     readonly EncodingServices: never;
   },
   options: {
     readonly key: string;
-    readonly storage?: ProjectionKeyValueStorage;
   },
-): ProjectionStorage<Schema.Schema.Type<TSchema>, ProjectionStorageError> {
+): Effect.Effect<
+  ProjectionStorage<Schema.Schema.Type<TSchema>, ProjectionStorageError>,
+  never,
+  IndexedDbDatabase.IndexedDbDatabase
+> {
   const decodeSnapshot = Schema.decodeUnknownEffect(schema);
   const encodeSnapshot = Schema.encodeUnknownEffect(schema);
 
-  return {
-    load: Effect.gen(function* () {
-      const storage = yield* resolveStorage(options.key, options.storage);
-      const stored = storage.getItem(options.key);
-      if (stored === null) {
-        return Option.none<Schema.Schema.Type<TSchema>>();
-      }
+  return Effect.gen(function* () {
+    const api = yield* ProjectionDatabase.getQueryBuilder;
+    const snapshots = api.from("projection_snapshots");
 
-      const parsed = yield* Effect.try({
-        try: () => JSON.parse(stored) as unknown,
-        catch: () => undefined,
-      });
-      if (parsed === undefined) {
-        return Option.none<Schema.Schema.Type<TSchema>>();
-      }
+    return {
+      load: Effect.gen(function* () {
+        const rows = yield* snapshots
+          .select()
+          .equals(options.key)
+          .limit(1)
+          .pipe(
+            Effect.map((rows) => rows as ReadonlyArray<SnapshotRow>),
+            Effect.mapError(
+              (cause) =>
+                new ProjectionStorageError({
+                  operation: "load",
+                  key: options.key,
+                  cause,
+                }),
+            ),
+          );
+        const row = rows[0];
+        if (!row) {
+          return Option.none<Schema.Schema.Type<TSchema>>();
+        }
 
-      const decoded = yield* decodeSnapshot(parsed).pipe(
-        Effect.catch(() => Effect.succeed(undefined)),
-      );
-
-      return decoded === undefined
-        ? Option.none<Schema.Schema.Type<TSchema>>()
-        : Option.some(decoded);
-    }).pipe(Effect.catch(() => Effect.succeed(Option.none<Schema.Schema.Type<TSchema>>()))),
-    save: (snapshot) =>
-      Effect.gen(function* () {
-        const storage = yield* resolveStorage(options.key, options.storage);
-        const encoded = yield* encodeSnapshot(snapshot).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProjectionStorageError({
-                operation: "encode",
-                key: options.key,
-                cause,
-              }),
-          ),
+        return yield* decodeSnapshot(row.snapshot).pipe(
+          Effect.map(Option.some),
+          Effect.catch(() => Effect.succeed(Option.none<Schema.Schema.Type<TSchema>>())),
         );
-
-        yield* Effect.try({
-          try: () => {
-            storage.setItem(options.key, JSON.stringify(encoded));
-          },
-          catch: (cause) =>
-            new ProjectionStorageError({
-              operation: "save",
-              key: options.key,
-              cause,
-            }),
-        });
       }),
-  };
+      save: (snapshot) =>
+        Effect.gen(function* () {
+          const encoded = yield* encodeSnapshot(snapshot).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProjectionStorageError({
+                  operation: "encode",
+                  key: options.key,
+                  cause,
+                }),
+            ),
+          );
+
+          yield* snapshots
+            .upsert({
+              key: options.key,
+              snapshot: encoded as SnapshotRow["snapshot"],
+            })
+            .pipe(
+              Effect.asVoid,
+              Effect.mapError(
+                (cause) =>
+                  new ProjectionStorageError({
+                    operation: "save",
+                    key: options.key,
+                    cause,
+                  }),
+              ),
+            );
+        }),
+    };
+  });
 }
 
-const loadInitialSnapshot = <TSnapshot>(
-  initialValue: TSnapshot,
-  storage: ProjectionStorage<TSnapshot, any> | undefined,
-) => {
-  if (!storage) return initialValue;
-
-  const stored = Effect.runSync(
-    storage.load.pipe(Effect.catch(() => Effect.succeed(Option.none<TSnapshot>()))),
-  );
-
-  return Option.getOrElse(stored, () => initialValue);
-};
-
-const resolveStorage = (key: string, storage: ProjectionKeyValueStorage | undefined) =>
-  Effect.try({
-    try: () => {
-      const resolved =
-        storage ??
-        (globalThis as unknown as { readonly localStorage?: ProjectionKeyValueStorage })
-          .localStorage;
-
-      if (!resolved) {
-        throw new Error("localStorage is not available");
-      }
-
-      return resolved;
-    },
-    catch: (cause) =>
-      new ProjectionStorageError({
-        operation: "resolve",
-        key,
-        cause,
-      }),
-  });
+/**
+ * @since 0.0.0
+ * @category layer
+ */
+export function indexedDbLayer<TIdentifier, const TSchema extends Schema.Schema<any>>(
+  tag: Context.Service<
+    TIdentifier,
+    IProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError>
+  >,
+  options: {
+    readonly databaseName?: string;
+    readonly key: string;
+    readonly schema: TSchema & {
+      readonly DecodingServices: never;
+      readonly EncodingServices: never;
+    };
+    readonly initialValue: Schema.Schema.Type<TSchema>;
+  },
+): Layer.Layer<
+  TIdentifier,
+  ProjectionStorageError | IndexedDbDatabase.IndexedDbDatabaseError,
+  IndexedDb.IndexedDb
+> {
+  return Layer.effect(
+    tag,
+    Effect.gen(function* () {
+      const storage = yield* indexedDbStorage(options.schema, { key: options.key });
+      return yield* make({
+        initialValue: options.initialValue,
+        storage,
+      });
+    }),
+  ).pipe(Layer.provide(databaseLayer(options.databaseName)));
+}

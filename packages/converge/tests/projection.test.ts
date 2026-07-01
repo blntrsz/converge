@@ -1,7 +1,9 @@
+import { IndexedDb } from "@effect/platform-browser";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
-import { Event, EventInstance, type ProjectionKeyValueStorage } from "../src/index.ts";
+import { indexedDB, IDBKeyRange } from "fake-indexeddb";
+import { Event, EventHandler, EventInstance } from "../src/index.ts";
 import * as Projection from "../src/projection/index.ts";
 
 const todoCreated = Event.make("todo.created.v1", {
@@ -26,128 +28,103 @@ const TodoListSchema = Schema.Array(TodoSchema);
 
 type Todo = Schema.Schema.Type<typeof TodoSchema>;
 
-class MemoryStorage implements ProjectionKeyValueStorage {
-  readonly values = new Map<string, string>();
-
-  getItem(key: string) {
-    return this.values.get(key) ?? null;
-  }
-
-  setItem(key: string, value: string) {
-    this.values.set(key, value);
-  }
-}
+class TodoProjection extends Context.Service<
+  TodoProjection,
+  Projection.IProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+>()("TodoProjection") {}
 
 const sortTodos = (todos: ReadonlyArray<Todo>) =>
   [...todos].sort((left, right) => left.createdAt - right.createdAt);
 
-const makeTodoProjection = (storage: MemoryStorage) =>
-  Projection.make({
-    name: "todos",
-    initialValue: [] as ReadonlyArray<Todo>,
-    storage: Projection.localStorage(TodoListSchema, {
-      key: "todos",
-      storage,
-    }),
-    reducers: [
-      Projection.reducer(todoCreated, (todos: ReadonlyArray<Todo>, event) => {
-        if (todos.some((todo) => todo.id === event.eventDetails.id)) {
-          return Effect.succeed(todos);
-        }
+const todoCreatedHandler = EventHandler.make(
+  todoCreated,
+  Effect.fn(function* (event) {
+    const projection = yield* TodoProjection;
 
-        return Effect.succeed(
-          sortTodos([
-            ...todos,
-            {
-              id: event.eventDetails.id,
-              title: event.eventDetails.title,
-              completed: false,
-              createdAt: event.eventDetails.createdAt,
-            },
-          ]),
-        );
-      }),
-      Projection.reducer(todoCompletionSet, (todos: ReadonlyArray<Todo>, event) =>
-        Effect.succeed(
-          todos.map((todo) =>
-            todo.id === event.eventDetails.id
-              ? { ...todo, completed: event.eventDetails.completed }
-              : todo,
-          ),
-        ),
+    yield* projection.update((todos) => {
+      if (todos.some((todo) => todo.id === event.eventDetails.id)) {
+        return todos;
+      }
+
+      return sortTodos([
+        ...todos,
+        {
+          id: event.eventDetails.id,
+          title: event.eventDetails.title,
+          completed: false,
+          createdAt: event.eventDetails.createdAt,
+        },
+      ]);
+    });
+  }),
+);
+
+const todoCompletionSetHandler = EventHandler.make(
+  todoCompletionSet,
+  Effect.fn(function* (event) {
+    const projection = yield* TodoProjection;
+
+    yield* projection.update((todos) =>
+      todos.map((todo) =>
+        todo.id === event.eventDetails.id
+          ? { ...todo, completed: event.eventDetails.completed }
+          : todo,
       ),
-    ],
-  });
+    );
+  }),
+);
+
+const FakeIndexedDbLayer = Layer.succeed(
+  IndexedDb.IndexedDb,
+  IndexedDb.make({ indexedDB, IDBKeyRange }),
+);
+
+const memoryProjectionLayer = Projection.memoryLayer(TodoProjection, {
+  initialValue: [] as ReadonlyArray<Todo>,
+});
+
+const indexedDbProjectionLayer = (databaseName: string) =>
+  Projection.indexedDbLayer(TodoProjection, {
+    databaseName,
+    key: "todos",
+    schema: TodoListSchema,
+    initialValue: [] as ReadonlyArray<Todo>,
+  }).pipe(Layer.provide(FakeIndexedDbLayer));
 
 describe("Projection", () => {
-  it.effect("applies typed reducers, persists snapshots, and notifies subscribers", () =>
+  it.effect("lets event handlers update an injected projection service", () =>
     Effect.gen(function* () {
-      const storage = new MemoryStorage();
-      const projection = makeTodoProjection(storage);
-      let notifications = 0;
-      const unsubscribe = projection.subscribe(() => {
-        notifications += 1;
-      });
-
       const event = yield* EventInstance.make(todoCreated, {
         id: "1",
         title: "Buy milk",
         createdAt: 1,
       });
 
-      yield* projection.apply(event);
+      yield* todoCreatedHandler.run(event);
 
-      assert.deepStrictEqual(projection.getSnapshot(), [
+      const projection = yield* TodoProjection;
+      const snapshot = yield* projection.get;
+
+      assert.deepStrictEqual(snapshot, [
         { id: "1", title: "Buy milk", completed: false, createdAt: 1 },
       ]);
-      assert.strictEqual(notifications, 1);
-      assert.strictEqual(
-        storage.getItem("todos"),
-        JSON.stringify([{ id: "1", title: "Buy milk", completed: false, createdAt: 1 }]),
-      );
-
-      unsubscribe();
-    }),
+    }).pipe(Effect.provide(memoryProjectionLayer)),
   );
 
-  it.effect("hydrates valid persisted snapshots", () =>
-    Effect.sync(() => {
-      const storage = new MemoryStorage();
-      storage.setItem(
-        "todos",
-        JSON.stringify([{ id: "1", title: "Stored", completed: true, createdAt: 1 }]),
-      );
-
-      const projection = makeTodoProjection(storage);
-
-      assert.deepStrictEqual(projection.getSnapshot(), [
-        { id: "1", title: "Stored", completed: true, createdAt: 1 },
-      ]);
-    }),
-  );
-
-  it.effect("falls back to initial snapshot for invalid persisted data", () =>
-    Effect.sync(() => {
-      const storage = new MemoryStorage();
-      storage.setItem("todos", JSON.stringify([{ id: 1, title: "Invalid" }]));
-
-      const projection = makeTodoProjection(storage);
-
-      assert.deepStrictEqual(projection.getSnapshot(), []);
-    }),
-  );
-
-  it.effect("updates the Effect Atom when the projection changes", () =>
+  it.effect("notifies subscribers and updates the Effect Atom", () =>
     Effect.gen(function* () {
-      const storage = new MemoryStorage();
-      const projection = makeTodoProjection(storage);
+      const projection = yield* TodoProjection;
+      let notifications = 0;
+      const unsubscribeProjection = yield* projection.subscribe(() => {
+        notifications += 1;
+      });
       const registry = AtomRegistry.make({
         scheduleTask: (run) => {
           run();
           return () => undefined;
         },
       });
-      const unsubscribe = registry.subscribe(projection.atom, () => undefined);
+      const unsubscribeAtom = registry.subscribe(projection.atom, () => undefined);
 
       assert.deepStrictEqual(registry.get(projection.atom), []);
 
@@ -157,14 +134,73 @@ describe("Projection", () => {
         createdAt: 1,
       });
 
-      yield* projection.apply(event);
+      yield* todoCreatedHandler.run(event);
 
+      assert.strictEqual(notifications, 1);
       assert.deepStrictEqual(registry.get(projection.atom), [
         { id: "1", title: "Buy milk", completed: false, createdAt: 1 },
       ]);
 
-      unsubscribe();
+      unsubscribeProjection();
+      unsubscribeAtom();
       registry.dispose();
+    }).pipe(Effect.provide(memoryProjectionLayer)),
+  );
+
+  it.effect("persists and hydrates snapshots with IndexedDB", () =>
+    Effect.gen(function* () {
+      const databaseName = `projection-${Date.now()}-${Math.random()}`;
+      const writeLayer = indexedDbProjectionLayer(databaseName);
+      const readLayer = indexedDbProjectionLayer(databaseName);
+
+      yield* Effect.gen(function* () {
+        const event = yield* EventInstance.make(todoCreated, {
+          id: "1",
+          title: "Stored",
+          createdAt: 1,
+        });
+        yield* todoCreatedHandler.run(event);
+        yield* todoCompletionSetHandler.run(
+          yield* EventInstance.make(todoCompletionSet, {
+            id: "1",
+            completed: true,
+          }),
+        );
+      }).pipe(Effect.provide(writeLayer));
+
+      const hydrated = yield* Effect.gen(function* () {
+        const projection = yield* TodoProjection;
+        return yield* projection.get;
+      }).pipe(Effect.provide(readLayer));
+
+      assert.deepStrictEqual(hydrated, [
+        { id: "1", title: "Stored", completed: true, createdAt: 1 },
+      ]);
+    }),
+  );
+
+  it.effect("falls back to initial snapshot for invalid IndexedDB data", () =>
+    Effect.gen(function* () {
+      const databaseName = `projection-invalid-${Date.now()}-${Math.random()}`;
+      const layer = indexedDbProjectionLayer(databaseName);
+
+      yield* Effect.gen(function* () {
+        const api = yield* Projection.ProjectionDatabase.getQueryBuilder;
+        yield* api.from("projection_snapshots").upsert({
+          key: "todos",
+          snapshot: [{ id: 1, title: "Invalid" }],
+        });
+      }).pipe(
+        Effect.provide(Projection.databaseLayer(databaseName)),
+        Effect.provide(FakeIndexedDbLayer),
+      );
+
+      const snapshot = yield* Effect.gen(function* () {
+        const projection = yield* TodoProjection;
+        return yield* projection.get;
+      }).pipe(Effect.provide(layer));
+
+      assert.deepStrictEqual(snapshot, []);
     }),
   );
 });

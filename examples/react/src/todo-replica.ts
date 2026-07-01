@@ -1,5 +1,6 @@
 import { IndexedDb } from "@effect/platform-browser";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Context, Effect, Layer, ManagedRuntime } from "effect";
+import * as EventHandler from "../../../packages/converge/src/event/event-handler.ts";
 import * as EventInstance from "../../../packages/converge/src/event/event-instance.ts";
 import * as EventRouter from "../../../packages/converge/src/event/event-router.ts";
 import * as HttpPrimarySyncEngine from "../../../packages/converge/src/primary-sync-engine/layers/http-primary-sync-engine.ts";
@@ -16,53 +17,77 @@ import {
 
 const projectionStorageKey = "converge-react.todos";
 
+export class TodoProjection extends Context.Service<
+  TodoProjection,
+  Projection.IProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+>()("TodoProjection") {}
+
 const sortTodos = (todos: ReadonlyArray<Todo>) =>
   [...todos].sort((left, right) => left.createdAt - right.createdAt);
 
-export const todoProjection = Projection.make({
-  name: "todos",
-  initialValue: [] as ReadonlyArray<Todo>,
-  storage: Projection.localStorage(TodoListSchema, { key: projectionStorageKey }),
-  reducers: [
-    Projection.reducer(todoCreated, (todos: ReadonlyArray<Todo>, event) => {
+const replicaTodoCreatedHandler = EventHandler.make(
+  todoCreated,
+  Effect.fn(function* (event) {
+    const todosProjection = yield* TodoProjection;
+
+    yield* todosProjection.update((todos) => {
       if (todos.some((todo) => todo.id === event.eventDetails.id)) {
-        return Effect.succeed(todos);
+        return todos;
       }
 
-      return Effect.succeed(
-        sortTodos([
-          ...todos,
-          {
-            id: event.eventDetails.id,
-            title: event.eventDetails.title,
-            completed: false,
-            createdAt: event.eventDetails.createdAt,
-          },
-        ]),
-      );
-    }),
-    Projection.reducer(todoCompletionSet, (todos: ReadonlyArray<Todo>, event) =>
-      Effect.succeed(
-        todos.map((todo) =>
-          todo.id === event.eventDetails.id
-            ? { ...todo, completed: event.eventDetails.completed }
-            : todo,
-        ),
+      return sortTodos([
+        ...todos,
+        {
+          id: event.eventDetails.id,
+          title: event.eventDetails.title,
+          completed: false,
+          createdAt: event.eventDetails.createdAt,
+        },
+      ]);
+    });
+  }),
+);
+
+const replicaTodoCompletionSetHandler = EventHandler.make(
+  todoCompletionSet,
+  Effect.fn(function* (event) {
+    const todosProjection = yield* TodoProjection;
+
+    yield* todosProjection.update((todos) =>
+      todos.map((todo) =>
+        todo.id === event.eventDetails.id
+          ? { ...todo, completed: event.eventDetails.completed }
+          : todo,
       ),
-    ),
-    Projection.reducer(todoDeleted, (todos: ReadonlyArray<Todo>, event) =>
-      Effect.succeed(todos.filter((todo) => todo.id !== event.eventDetails.id)),
-    ),
-  ],
-});
+    );
+  }),
+);
+
+const replicaTodoDeletedHandler = EventHandler.make(
+  todoDeleted,
+  Effect.fn(function* (event) {
+    const todosProjection = yield* TodoProjection;
+
+    yield* todosProjection.update((todos) =>
+      todos.filter((todo) => todo.id !== event.eventDetails.id),
+    );
+  }),
+);
 
 const HttpPrimarySyncEngineLayer = HttpPrimarySyncEngine.layer({
   baseUrl: "/api/sync",
 });
 
 const ReplicaEventRouterLayer = EventRouter.layer({
-  handlers: todoProjection.handlers,
+  handlers: [replicaTodoCreatedHandler, replicaTodoCompletionSetHandler, replicaTodoDeletedHandler],
 });
+
+const TodoProjectionLayer = Projection.indexedDbLayer(TodoProjection, {
+  databaseName: "converge-react-todos-projection",
+  key: projectionStorageKey,
+  schema: TodoListSchema,
+  initialValue: [] as ReadonlyArray<Todo>,
+}).pipe(Layer.provide(IndexedDb.layerWindow));
 
 const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
   "converge-react-todos-replica",
@@ -71,6 +96,7 @@ const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
 const ReplicaTodoLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provide(ReplicaEventRouterLayer),
   Layer.provide(ReplicaDatabaseLayer),
+  Layer.provideMerge(TodoProjectionLayer),
   Layer.provideMerge(HttpPrimarySyncEngineLayer),
 );
 
@@ -85,6 +111,8 @@ const makeTodoId = () =>
 
 const runReplica = <A, E>(effect: Effect.Effect<A, E, ReplicaSyncEngine.ReplicaSyncEngine>) =>
   replicaRuntime.runPromise(effect);
+
+export const getTodoProjection = () => replicaRuntime.runPromise(TodoProjection);
 
 export const createTodo = (title: string) => {
   const trimmedTitle = title.trim();

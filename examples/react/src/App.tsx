@@ -12,15 +12,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  createTodo,
-  deleteTodo,
-  setTodoCompleted,
-  syncTodos,
-  todoProjection,
-} from "./todo-replica";
+import { createTodo, deleteTodo, setTodoCompleted, syncTodos } from "./todo-replica";
+import type { IProjection } from "../../../packages/converge/src/projection/index.ts";
+import type { Todo } from "./todo-events";
 
-export function App() {
+export function App({
+  todoProjection,
+}: {
+  readonly todoProjection: IProjection<ReadonlyArray<Todo>, unknown>;
+}) {
   const todos = useProjection(todoProjection);
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState("Ready");

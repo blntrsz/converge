@@ -16,18 +16,28 @@ This project was created using `bun init` in bun v1.3.13. [Bun](https://bun.com)
 
 ## React projections
 
-`Projection.make` lets apps provide typed Converge event reducers while the library owns snapshot storage, validation, subscriptions, and React reads.
+Projection services expose typed read/write snapshots. Event handlers update projections through Effect DI, so one handler can write one or more projections and the sync engine receives ordinary Converge handlers.
 
 ```ts
-const todos = Projection.make({
+class TodoProjection extends Context.Service<
+  TodoProjection,
+  Projection.IProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+>()("TodoProjection") {}
+
+const todoCreatedHandler = EventHandler.make(
+  todoCreated,
+  Effect.fn(function* (event) {
+    const todos = yield* TodoProjection;
+    yield* todos.update((snapshot) => [...snapshot, event.eventDetails]);
+  }),
+);
+
+const TodoProjectionLayer = Projection.indexedDbLayer(TodoProjection, {
+  databaseName: "todo-projections",
+  key: "todos",
+  schema: TodoListSchema,
   initialValue: [] as ReadonlyArray<Todo>,
-  storage: Projection.localStorage(TodoListSchema, { key: "todos" }),
-  reducers: [
-    Projection.reducer(todoCreated, (snapshot, event) =>
-      Effect.succeed([...snapshot, event.eventDetails]),
-    ),
-  ],
 });
 ```
 
-Use `todos.handlers` in an `EventRouter.layer`. In React, wrap the app with `ProjectionRegistryProvider` and read with `useProjection(todos)`. Internally the projection snapshot is an Effect `AtomRef` exposed as an Effect Atom, so React subscribes through `@effect/atom-react` while reducers remain Effect programs.
+Use the handlers in `EventRouter.layer` and provide the projection layer to the sync engine. Framework adapters can read the same projection service; React uses `useProjection(projection)` over the service's Effect Atom.
