@@ -1,10 +1,14 @@
 import { IndexedDb, IndexedDbDatabase, IndexedDbTable, IndexedDbVersion } from "@effect/platform-browser";
-import { Effect, Layer, Option, Queue, Result, Semaphore, Schema } from "effect";
+import { Effect, Layer, Option, Queue, Ref, Result, Semaphore, Schema } from "effect";
 import { EventInstance } from "../../event/event-instance.ts";
 import { EventRouterService } from "../../event/event-router.ts";
 import { PrimarySyncEngine } from "../../primary-sync-engine/services/primary-sync-engine.ts";
 import { ReplicaApplyContext, type ApplyPhase } from "../services/apply-context.ts";
-import { ReplicaSyncEngine, type IReplicaSyncEngine } from "../services/replica-sync-engine.ts";
+import {
+  ReplicaSyncEngine,
+  type IReplicaSyncEngine,
+  type SyncMode,
+} from "../services/replica-sync-engine.ts";
 
 const EventHistoryRow = Schema.Struct({
   id: IndexedDb.AutoIncrement,
@@ -143,6 +147,7 @@ export const layer: Layer.Layer<
     const proposedEvents = api.from("proposed_events");
     const pendingTasks = api.from("pending_tasks");
     const acceptLock = yield* Semaphore.make(1);
+    const syncMode = yield* Ref.make<SyncMode>({ _tag: "Latest" });
 
     const findAcceptedEvent = (eventId: string) =>
       eventHistory
@@ -363,6 +368,9 @@ export const layer: Layer.Layer<
      */
     const push: IReplicaSyncEngine["push"] = Effect.fn("ReplicaSyncEngine.push")(
       function* (...events) {
+        const mode = yield* Ref.get(syncMode);
+        if (mode._tag === "Checkout") return;
+
         for (const event of events) {
           yield* proposeAndApplyOptimistically(event);
         }
@@ -379,11 +387,40 @@ export const layer: Layer.Layer<
      */
     const poke: IReplicaSyncEngine["poke"] = Effect.fn("ReplicaSyncEngine.poke")(
       function* () {
+        const mode = yield* Ref.get(syncMode);
+        if (mode._tag === "Checkout") return;
+
         const taskId = yield* insertPendingTask({ kind: "reconcile" });
         yield* Queue.offer(queue, { kind: "reconcile", taskId });
       },
     );
 
-    return ReplicaSyncEngine.of({ push, poke });
+    /**
+     * @since 0.0.0
+     * @category service-method
+     */
+    const checkout: IReplicaSyncEngine["checkout"] = Effect.fn("ReplicaSyncEngine.checkout")(
+      function* (eventId) {
+        yield* Ref.set(syncMode, { _tag: "Checkout", eventId });
+      },
+    );
+
+    /**
+     * @since 0.0.0
+     * @category service-method
+     */
+    const setLatest: IReplicaSyncEngine["setLatest"] = Effect.fn("ReplicaSyncEngine.setLatest")(
+      function* () {
+        yield* Ref.set(syncMode, { _tag: "Latest" });
+      },
+    );
+
+    return ReplicaSyncEngine.of({
+      mode: Ref.get(syncMode),
+      push,
+      poke,
+      checkout,
+      setLatest,
+    });
   }),
 );

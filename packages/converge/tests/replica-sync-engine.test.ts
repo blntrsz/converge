@@ -298,4 +298,52 @@ layer(ReplicaSyncEngineLayer)((it) => {
       ),
     30000,
   );
+
+  it.effect(
+    "checkout is read-only until returning to Latest",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+
+          const remoteEvent = yield* EventInstance.make(todoCreated, {
+            id: "6-remote",
+            name: "Buy tea",
+          });
+          const localEvent = yield* EventInstance.make(todoCreated, {
+            id: "6-local",
+            name: "Buy sugar",
+          });
+
+          yield* primary.push(remoteEvent);
+          yield* replica.checkout(remoteEvent.eventId);
+
+          assert.deepStrictEqual(yield* replica.mode, {
+            _tag: "Checkout",
+            eventId: remoteEvent.eventId,
+          });
+
+          yield* replica.push(localEvent);
+          yield* replica.poke();
+
+          assert.strictEqual(replicaHandlerRuns, 0);
+          assert.strictEqual(optimisticHandlerRuns, 0);
+
+          const checkoutPage = yield* primary.pull();
+          assert.isFalse(checkoutPage.data.some((event) => event.eventId === localEvent.eventId));
+
+          yield* replica.setLatest();
+          assert.deepStrictEqual(yield* replica.mode, { _tag: "Latest" });
+
+          yield* replica.poke();
+          yield* waitForReplicaHandler(1);
+
+          assert.strictEqual(replicaHandlerRuns, 1);
+          assert.strictEqual(acceptedHandlerRuns, 1);
+        }),
+      ),
+    30000,
+  );
 });

@@ -3,9 +3,30 @@ import type { EventInstance } from "../../event";
 
 /**
  * @since 0.0.0
+ * @category model
+ */
+export type SyncMode =
+  | {
+      readonly _tag: "Latest";
+    }
+  | {
+      readonly _tag: "Checkout";
+      readonly eventId: string;
+    };
+
+/**
+ * @since 0.0.0
  * @category service-interface
  */
 export interface IReplicaSyncEngine {
+  /**
+   * The active replica sync mode.
+   *
+   * @since 0.0.0
+   * @category service-method-interface
+   */
+  readonly mode: Effect.Effect<SyncMode>;
+
   /**
    * Runs the local event handler optimistically and enqueues a remote forward.
    *
@@ -29,6 +50,23 @@ export interface IReplicaSyncEngine {
    * @category service-method-interface
    */
   poke(): Effect.Effect<void>;
+
+  /**
+   * Pins the replica to a historical eventId. Checkout mode is read-only:
+   * push and poke are no-ops until the replica returns to Latest.
+   *
+   * @since 0.0.0
+   * @category service-method-interface
+   */
+  checkout(eventId: string): Effect.Effect<void>;
+
+  /**
+   * Returns the replica to Latest mode.
+   *
+   * @since 0.0.0
+   * @category service-method-interface
+   */
+  setLatest(): Effect.Effect<void>;
 }
 
 /**
