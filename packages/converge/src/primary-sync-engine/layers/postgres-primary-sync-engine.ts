@@ -83,6 +83,35 @@ export const layer: Layer.Layer<
           `,
     });
 
+    const getLatestEventQuery = SqlSchema.findAll({
+      Request: Schema.Struct({}),
+      Result: EventInstance,
+      execute: () => sql`
+        SELECT
+          event_id,
+          event_type,
+          event_details
+        FROM event_history
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+    });
+
+    const getEventQuery = SqlSchema.findAll({
+      Request: Schema.Struct({
+        eventId: Schema.String,
+      }),
+      Result: EventInstance,
+      execute: (input) => sql`
+        SELECT
+          event_id,
+          event_type,
+          event_details
+        FROM event_history
+        WHERE event_id = ${input.eventId}
+      `,
+    });
+
     const insertEvent = (event: EventInstance) =>
       sql<{ event_id: string }>`
         INSERT INTO event_history ${sql.insert({
@@ -186,9 +215,35 @@ export const layer: Layer.Layer<
       },
     );
 
+    /**
+     * @since 0.0.0
+     * @category service-method
+     */
+    const getLatestEvent: IPrimarySyncEngine["getLatestEvent"] = Effect.fn(
+      "PrimarySyncEngine.getLatestEvent",
+    )(function* () {
+      const rows = yield* getLatestEventQuery({}).pipe(Effect.orDie);
+
+      return Array.head(rows);
+    });
+
+    /**
+     * @since 0.0.0
+     * @category service-method
+     */
+    const getEvent: IPrimarySyncEngine["getEvent"] = Effect.fn("PrimarySyncEngine.getEvent")(
+      function* (eventId) {
+        const rows = yield* getEventQuery({ eventId }).pipe(Effect.orDie);
+
+        return Array.head(rows);
+      },
+    );
+
     return PrimarySyncEngine.of({
       pull,
       push,
+      getLatestEvent,
+      getEvent,
     });
   }),
 );

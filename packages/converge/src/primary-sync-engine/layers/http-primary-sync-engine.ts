@@ -1,4 +1,4 @@
-import { Effect, Layer, Result, Schema } from "effect";
+import { Effect, Layer, Option, Result, Schema } from "effect";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -94,6 +94,20 @@ export const WirePushResponse = Schema.Struct({
  */
 export type WirePushResponse = typeof WirePushResponse.Type;
 
+/**
+ * @since 0.0.0
+ * @category schema
+ */
+export const WireEventResponse = Schema.Struct({
+  event: Schema.NullOr(WireEvent),
+});
+
+/**
+ * @since 0.0.0
+ * @category schema
+ */
+export type WireEventResponse = typeof WireEventResponse.Type;
+
 type PrimarySyncPullPage =
   | {
       readonly data: EventInstance[];
@@ -172,6 +186,28 @@ export const pushResultToWire = (
     ? { ok: true, event: eventToWire(result.success) }
     : { ok: false, event: eventToWire(result.failure) };
 
+/**
+ * @since 0.0.0
+ * @category encoding
+ */
+export const eventResponseFromWire = (
+  response: WireEventResponse,
+): Option.Option<EventInstance> =>
+  response.event === null ? Option.none() : Option.some(eventFromWire(response.event));
+
+/**
+ * @since 0.0.0
+ * @category encoding
+ */
+export const eventResponseToWire = (
+  event: Option.Option<EventInstance>,
+): WireEventResponse => ({
+  event: Option.match(event, {
+    onNone: () => null,
+    onSome: eventToWire,
+  }),
+});
+
 const pullPrimary = (cursor?: string) =>
   Effect.gen(function* () {
     const primary = yield* PrimarySyncEngine;
@@ -184,6 +220,20 @@ const pushPrimary = (events: EventInstance[]) =>
     const primary = yield* PrimarySyncEngine;
 
     return yield* primary.push(...events);
+  });
+
+const getLatestEventPrimary = () =>
+  Effect.gen(function* () {
+    const primary = yield* PrimarySyncEngine;
+
+    return yield* primary.getLatestEvent();
+  });
+
+const getEventPrimary = (eventId: string) =>
+  Effect.gen(function* () {
+    const primary = yield* PrimarySyncEngine;
+
+    return yield* primary.getEvent(eventId);
   });
 
 const json = (body: unknown, status?: number) =>
@@ -240,6 +290,34 @@ export const routesLayer = (options?: RoutesLayerOptions) =>
             });
           }),
       ),
+
+      HttpRouter.route(
+        "GET",
+        "/events/latest",
+        () =>
+          Effect.gen(function* () {
+            const event = yield* getLatestEventPrimary();
+
+            return json(eventResponseToWire(event));
+          }),
+      ),
+
+      HttpRouter.route(
+        "GET",
+        "/events/:eventId",
+        () =>
+          Effect.gen(function* () {
+            const params = yield* HttpRouter.params;
+            const eventId = params.eventId;
+            if (!eventId) {
+              return badRequest("Expected eventId path parameter");
+            }
+
+            const event = yield* getEventPrimary(eventId);
+
+            return json(eventResponseToWire(event));
+          }),
+      ),
     ] as const,
     options?.prefix ? { prefix: options.prefix } : undefined,
   );
@@ -280,7 +358,7 @@ export interface LayerOptions {
 
 const endpointUrl = (
   baseUrl: string | URL,
-  endpoint: "/pull" | "/push",
+  endpoint: "/pull" | "/push" | "/events/latest" | `/events/${string}`,
   search?: Record<string, string>,
 ) => {
   const url = `${baseUrl}`.replace(/\/+$/, "") + endpoint;
@@ -294,6 +372,7 @@ const endpointUrl = (
 
 const decodePullPage = Schema.decodeUnknownEffect(WirePullPage);
 const decodePushResponse = Schema.decodeUnknownEffect(WirePushResponse);
+const decodeEventResponse = Schema.decodeUnknownEffect(WireEventResponse);
 
 /**
  * @since 0.0.0
@@ -344,11 +423,49 @@ export const layer = (options: LayerOptions): Layer.Layer<PrimarySyncEngine> => 
       Effect.orDie,
     );
 
+  const getLatestEvent: IPrimarySyncEngine["getLatestEvent"] = () =>
+    Effect.tryPromise({
+      async try() {
+        const response = await fetch(endpointUrl(options.baseUrl, "/events/latest"));
+        if (!response.ok) {
+          throw new Error(`GetLatestEvent failed with ${response.status}`);
+        }
+
+        return await response.json();
+      },
+      catch: (error) => error,
+    }).pipe(
+      Effect.flatMap((body) => decodeEventResponse(body)),
+      Effect.map(eventResponseFromWire),
+      Effect.orDie,
+    );
+
+  const getEvent: IPrimarySyncEngine["getEvent"] = (eventId) =>
+    Effect.tryPromise({
+      async try() {
+        const response = await fetch(
+          endpointUrl(options.baseUrl, `/events/${encodeURIComponent(eventId)}`),
+        );
+        if (!response.ok) {
+          throw new Error(`GetEvent failed with ${response.status}`);
+        }
+
+        return await response.json();
+      },
+      catch: (error) => error,
+    }).pipe(
+      Effect.flatMap((body) => decodeEventResponse(body)),
+      Effect.map(eventResponseFromWire),
+      Effect.orDie,
+    );
+
   return Layer.succeed(
     PrimarySyncEngine,
     PrimarySyncEngine.of({
       pull,
       push,
+      getLatestEvent,
+      getEvent,
     }),
   );
 };
