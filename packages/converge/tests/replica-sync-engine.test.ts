@@ -108,7 +108,7 @@ const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer("test-repl
 
 const ReplicaSyncEngineLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provide(ReplicaEventRouterLayer),
-  Layer.provide(ReplicaDatabaseLayer),
+  Layer.provideMerge(ReplicaDatabaseLayer),
   Layer.provideMerge(ReplicaApplyContext.layer),
   Layer.provideMerge(PrimarySyncEngineLayer),
 );
@@ -345,5 +345,42 @@ layer(ReplicaSyncEngineLayer)((it) => {
         }),
       ),
     30000,
+  );
+
+  it.effect(
+    "replica event log retains only the latest 100 accepted events",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+          const api = yield* IndexedDbReplicaSyncEngine.ReplicaSyncEngineDatabase.getQueryBuilder;
+
+          const total = IndexedDbReplicaSyncEngine.ReplicaEventHistoryCap + 5;
+          const events: EventInstance.EventInstance[] = [];
+          for (let i = 0; i < total; i++) {
+            events.push(
+              yield* EventInstance.make(todoCreated, {
+                id: `cap-${i}`,
+                name: `Todo ${i}`,
+              }),
+            );
+          }
+          yield* primary.push(...events);
+
+          yield* replica.poke();
+          yield* waitForReplicaHandler(total);
+          assert.strictEqual(acceptedHandlerRuns, total);
+
+          const rows = yield* api.from("event_history").select();
+          assert.strictEqual(rows.length, IndexedDbReplicaSyncEngine.ReplicaEventHistoryCap);
+
+          const eventIds = rows.map((row) => row.eventId);
+          assert.isTrue(eventIds.includes(events[total - 1]!.eventId));
+          assert.isFalse(eventIds.includes(events[0]!.eventId));
+        }),
+      ),
+    60000,
   );
 });

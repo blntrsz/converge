@@ -111,6 +111,15 @@ export class ReplicaSyncEngineDatabase extends IndexedDbDatabase.make(
 export const databaseLayer = (databaseName = "converge-replica-sync-engine") =>
   ReplicaSyncEngineDatabase.layer(databaseName);
 
+/**
+ * The replica event log retains only the latest accepted events globally
+ * (ADR 0001). Older events remain on the primary.
+ *
+ * @since 0.0.0
+ * @category constants
+ */
+export const ReplicaEventHistoryCap = 100;
+
 const eventFromRow = (row: EventHistoryRow) =>
   new EventInstance({
     eventId: row.eventId,
@@ -176,7 +185,20 @@ export const layer: Layer.Layer<
           eventType: event.eventType,
           eventDetails: event.eventDetails as EventHistoryInsert["eventDetails"],
         };
-        yield* eventHistory.insert(row as never).pipe(Effect.asVoid, Effect.orDie);
+        const key = yield* eventHistory.insert(row as never).pipe(Effect.orDie);
+        yield* trimEventHistory(Number(key));
+      });
+
+    // Rows use a monotonic auto-increment key, so every id at or below
+    // `latestId - cap` is outside the rolling window (ADR 0001).
+    const trimEventHistory = (latestId: number) =>
+      Effect.gen(function* () {
+        const evictBelow = latestId - ReplicaEventHistoryCap;
+        if (evictBelow <= 0) return;
+        yield* eventHistory
+          .delete()
+          .lte(evictBelow as never)
+          .pipe(Effect.asVoid, Effect.orDie);
       });
 
     const deleteProposedEvent = (eventId: string) =>
