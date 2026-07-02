@@ -400,8 +400,8 @@ export const layer: Layer.Layer<
      * @category service-method
      */
     const checkout: IReplicaSyncEngine["checkout"] = Effect.fn("ReplicaSyncEngine.checkout")(
-      function* (syncAnchor) {
-        yield* Ref.set(syncMode, { _tag: "Checkout", syncAnchor });
+      function* (eventHistoryId) {
+        yield* Ref.set(syncMode, { _tag: "Checkout", eventHistoryId });
       },
     );
 

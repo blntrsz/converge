@@ -25,15 +25,15 @@ One recorded occurrence of an Event, identified by a unique eventId and carrying
 _Avoid_: Event record, message instance
 
 **Projection**:
-A read-only, queryable view of state derived from storage. EventHandlers write storage directly; the projection reflects that storage. Used to bootstrap a replica from a snapshot so the full event log need not be replayed. After bootstrap, the replica continues syncing from a sync anchor onward.
+A read-only, queryable view of state derived from storage. EventHandlers write storage directly; the projection reflects that storage. Used to bootstrap a replica from a snapshot so the full event log need not be replayed. After bootstrap, the replica continues syncing from an event history id onward.
 _Avoid_: Read model, cache, write model
 
-**Sync anchor**:
+**Event history id**:
 The eventId corresponding to the replica sync engine's active version sequence. One per replica, shared across all projections. Marks where incremental event-log sync begins after bootstrap.
-_Avoid_: Cursor, checkpoint, offset, per-projection cursor
+_Avoid_: Sync anchor, cursor, checkpoint, offset, per-projection cursor
 
 **Sync mode**:
-How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic overlay is disabled. Returning to Latest re-bootstraps all projections to head, re-seeds the anchor event, and resumes normal sync.
+How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic overlay is disabled. Returning to Latest re-bootstraps all projections to head, re-seeds event_history at eventHistoryId, and resumes normal sync.
 _Avoid_: Live mode, replay mode, follow mode
 
 **Primary storage**:
@@ -97,11 +97,11 @@ A read-only projection on the primary, derived from primary storage updated by p
 _Avoid_: Server read model, materialized view, cache
 
 **Bootstrap**:
-Hydrating a replica's projections from primary flat snapshots at the sync engine's active version sequence. Triggered on the first `poke`, when checking out an older version sequence, or when returning from Checkout to Latest. Each projection is fetched separately: `GET /bootstrap/{projectionKey}?syncAnchor=<eventId>`. Seeds `event_history` with the real anchor EventInstance so pull can resume from `lastEventId()` — handlers are not re-run for the seeded event; the imported snapshot already reflects it.
+Hydrating a replica's projections from primary flat snapshots at the sync engine's active version sequence. Triggered on the first `poke`, when checking out an older version sequence, or when returning from Checkout to Latest. Each projection is fetched separately: `GET /bootstrap/{projectionKey}?eventHistoryId=<eventId>`. Seeds `event_history` with the EventInstance at eventHistoryId so pull can resume from `lastEventId()` — handlers are not re-run for the seeded event; the imported snapshot already reflects it.
 _Avoid_: Initial sync, full replay, migration
 
 **Versioned projection**:
-Primary storage keeps every version of each record keyed by `since` sequence. Bootstrap encodes an anchored flat snapshot per projection: `GET /bootstrap/{projectionKey}?syncAnchor=<eventId>`. The primary resolves the anchor to a sequence, queries `since ≤ sequence`, and returns a materialized snapshot for replica storage. New events between fetches do not affect an anchored read.
+Primary storage keeps every version of each record keyed by `since` sequence. Bootstrap encodes a flat snapshot per projection at eventHistoryId: `GET /bootstrap/{projectionKey}?eventHistoryId=<eventId>`. The primary resolves eventHistoryId to a sequence, queries `since ≤ sequence`, and returns a materialized snapshot for replica storage. New events between fetches do not affect a pinned read.
 _Avoid_: Point-in-time read, historical snapshot
 
 **Event log**:
@@ -120,4 +120,4 @@ _Avoid_: Client handler, frontend handler
 Primary and replica handlers are separate implementations with different storage shapes (versioned vs flat), but the same event sequence must produce the same projection snapshot on both sides. Handlers must be idempotent — re-applying an event already reflected in storage is a no-op.
 _Avoid_: Shared handler, identical handler
 
-A replica hosts one or more projections. All projections share one replica event log and one sync anchor.
+A replica hosts one or more projections. All projections share one replica event log and one event history id.
