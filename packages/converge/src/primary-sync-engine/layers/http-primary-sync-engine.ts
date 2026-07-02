@@ -1,10 +1,14 @@
-import { Effect, Layer, Result, Schema } from "effect";
+import { Effect, Layer, Option, Result, Schema } from "effect";
 import {
   HttpRouter,
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http";
 import { EventInstance } from "../../event/event-instance.ts";
+import {
+  bootstrapToWire,
+} from "../../projection-bootstrap/layers/http-projection-bootstrap.ts";
+import { ProjectionBootstrapClient } from "../../projection-bootstrap/services/projection-bootstrap-client.ts";
 import { PrimarySyncEngine, type IPrimarySyncEngine } from "../services/primary-sync-engine.ts";
 
 /**
@@ -186,6 +190,13 @@ const pushPrimary = (events: EventInstance[]) =>
     return yield* primary.push(...events);
   });
 
+const fetchBootstrap = (projectionKey: string, syncAnchor?: string) =>
+  Effect.gen(function* () {
+    const client = yield* ProjectionBootstrapClient;
+
+    return yield* client.fetch(projectionKey, syncAnchor);
+  });
+
 const json = (body: unknown, status?: number) =>
   HttpServerResponse.jsonUnsafe(body, status ? { status } : undefined);
 
@@ -240,6 +251,25 @@ export const routesLayer = (options?: RoutesLayerOptions) =>
             });
           }),
       ),
+
+      HttpRouter.route(
+        "GET",
+        "/bootstrap",
+        (request) =>
+          Effect.gen(function* () {
+            const url = new URL(request.originalUrl, "http://localhost");
+            const projectionKey = url.searchParams.get("projectionKey");
+            const syncAnchor = url.searchParams.get("syncAnchor") ?? undefined;
+
+            if (!projectionKey) {
+              return badRequest("Expected projectionKey query parameter");
+            }
+
+            const result = yield* fetchBootstrap(projectionKey, syncAnchor);
+
+            return json(bootstrapToWire(result));
+          }),
+      ),
     ] as const,
     options?.prefix ? { prefix: options.prefix } : undefined,
   );
@@ -258,7 +288,7 @@ export interface WebHandlerOptions extends RoutesLayerOptions {
  * @category constructor
  */
 export const makeWebHandler = <ROut, E>(
-  primaryLayer: Layer.Layer<PrimarySyncEngine | ROut, E, never>,
+  primaryLayer: Layer.Layer<PrimarySyncEngine | ProjectionBootstrapClient | ROut, E, never>,
   options?: WebHandlerOptions,
 ) =>
   HttpRouter.toWebHandler(
@@ -280,7 +310,7 @@ export interface LayerOptions {
 
 const endpointUrl = (
   baseUrl: string | URL,
-  endpoint: "/pull" | "/push",
+  endpoint: "/pull" | "/push" | "/bootstrap",
   search?: Record<string, string>,
 ) => {
   const url = `${baseUrl}`.replace(/\/+$/, "") + endpoint;
@@ -344,11 +374,18 @@ export const layer = (options: LayerOptions): Layer.Layer<PrimarySyncEngine> => 
       Effect.orDie,
     );
 
+  const getLatestEvent: IPrimarySyncEngine["getLatestEvent"] = () =>
+    Effect.succeed(Option.none());
+
+  const getEvent: IPrimarySyncEngine["getEvent"] = () => Effect.succeed(Option.none());
+
   return Layer.succeed(
     PrimarySyncEngine,
     PrimarySyncEngine.of({
       pull,
       push,
+      getLatestEvent,
+      getEvent,
     }),
   );
 };

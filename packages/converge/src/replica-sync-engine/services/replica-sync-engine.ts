@@ -7,9 +7,9 @@ import type { EventInstance } from "../../event";
  */
 export interface IReplicaSyncEngine {
   /**
-   * Runs the local event handler optimistically and enqueues a remote forward.
+   * Runs an optimistic overlay update and enqueues a remote forward.
    *
-   * Returns once the optimistic projection update is complete. The remote
+   * Returns once the optimistic overlay update is complete. The remote
    * verdict happens in a background consumer. The local `event_history` append
    * happens later when the accepted event is pulled from the primary.
    *
@@ -19,16 +19,31 @@ export interface IReplicaSyncEngine {
   push(...events: EventInstance.EventInstance[]): Effect.Effect<void>;
 
   /**
-   * Enqueues a reconcile task that pulls accepted events from the primary and
-   * applies them to the local projection.
-   *
-   * Returns immediately. The pull and local apply happen in a background
-   * consumer.
+   * Bootstraps if needed, then enqueues a reconcile task that pulls accepted
+   * events from the primary and applies them locally.
    *
    * @since 0.0.0
    * @category service-method-interface
    */
   poke(): Effect.Effect<void>;
+
+  /**
+   * Pins a historical sync anchor and bootstraps all projections at that
+   * sequence. Checkout mode is read-only.
+   *
+   * @since 0.0.0
+   * @category service-method-interface
+   */
+  checkout(syncAnchor: string): Effect.Effect<void>;
+
+  /**
+   * Returns to Latest mode and re-bootstraps all projections at the primary
+   * head before resuming sync.
+   *
+   * @since 0.0.0
+   * @category service-method-interface
+   */
+  setLatest(): Effect.Effect<void>;
 }
 
 /**

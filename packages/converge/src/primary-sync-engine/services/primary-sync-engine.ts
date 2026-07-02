@@ -1,4 +1,4 @@
-import { Context, Result, type Effect } from "effect";
+import { Context, Effect, Option, Result } from "effect";
 import type { EventInstance } from "../../event";
 
 /**
@@ -29,6 +29,18 @@ export interface IPrimarySyncEngine {
   push(
     ...events: EventInstance.EventInstance[]
   ): Effect.Effect<Result.Result<EventInstance.EventInstance, EventInstance.EventInstance>[]>;
+
+  /**
+   * @since 0.0.0
+   * @category service-method-interface
+   */
+  getLatestEvent(): Effect.Effect<Option.Option<EventInstance.EventInstance>>;
+
+  /**
+   * @since 0.0.0
+   * @category service-method-interface
+   */
+  getEvent(eventId: string): Effect.Effect<Option.Option<EventInstance.EventInstance>>;
 }
 
 /**

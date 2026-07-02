@@ -38,6 +38,24 @@ export const migrations = Migrator.fromRecord({
 export const migrationsLayer = Layer.effectDiscard(Migrator.make({})({ loader: migrations }));
 
 /**
+ * Resolves a sync anchor eventId to its version sequence in `event_history`.
+ *
+ * @since 0.0.0
+ * @category query
+ */
+export const versionSequenceAt = (eventId: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ id: number }>`
+      SELECT id
+      FROM event_history
+      WHERE event_id = ${eventId}
+      LIMIT 1
+    `;
+    return Option.fromNullable(rows[0]?.id);
+  });
+
+/**
  * @since 0.0.0
  * @category layer
  */
@@ -93,6 +111,28 @@ export const layer: Layer.Layer<
         ON CONFLICT (event_id) DO NOTHING
         RETURNING event_id
       `;
+
+    const getLatestEventQuery = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: EventInstance,
+      execute: () => sql`
+        SELECT event_id, event_type, event_details
+        FROM event_history
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+    });
+
+    const getEventQuery = SqlSchema.findAll({
+      Request: Schema.Struct({ eventId: Schema.String }),
+      Result: EventInstance,
+      execute: ({ eventId }) => sql`
+        SELECT event_id, event_type, event_details
+        FROM event_history
+        WHERE event_id = ${eventId}
+        LIMIT 1
+      `,
+    });
 
     /**
      * @since 0.0.0
@@ -186,9 +226,25 @@ export const layer: Layer.Layer<
       },
     );
 
+    const getLatestEvent: IPrimarySyncEngine["getLatestEvent"] = Effect.fn(
+      "PrimarySyncEngine.getLatestEvent",
+    )(function* () {
+      const rows = yield* getLatestEventQuery(undefined).pipe(Effect.orDie);
+      return Array.head(rows);
+    });
+
+    const getEvent: IPrimarySyncEngine["getEvent"] = Effect.fn("PrimarySyncEngine.getEvent")(
+      function* (eventId) {
+        const rows = yield* getEventQuery({ eventId }).pipe(Effect.orDie);
+        return Array.head(rows);
+      },
+    );
+
     return PrimarySyncEngine.of({
       pull,
       push,
+      getLatestEvent,
+      getEvent,
     });
   }),
 );

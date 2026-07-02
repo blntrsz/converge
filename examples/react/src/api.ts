@@ -19,6 +19,7 @@ const ApiRoutes = Layer.mergeAll(
             "GET /api/todos",
             "GET /api/sync/pull?cursor=<eventId>",
             "POST /api/sync/push",
+            "GET /api/sync/bootstrap?projectionKey=<key>&syncAnchor=<eventId>",
           ],
         }),
       ),

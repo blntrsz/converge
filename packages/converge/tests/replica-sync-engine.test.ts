@@ -11,10 +11,15 @@ import {
   EventInstance,
   EventRouter,
   IndexedDbReplicaSyncEngine,
+  OptimisticEventApplier,
   PostgresPrimarySyncEngine,
+  PrimaryProjectionBootstrap,
   PrimarySyncEngine,
+  ProjectionBootstrapClient,
   ReplicaApplyContext,
+  ReplicaProjectionBootstrap,
   ReplicaSyncEngine,
+  HttpProjectionBootstrap,
 } from "../src/index.ts";
 import { PgliteSqlClient } from "../src/pglite-client.ts";
 
@@ -24,9 +29,8 @@ const todoCreated = Event.make("todo.created.v1", {
 });
 
 let replicaHandlerRuns = 0;
-let optimisticHandlerRuns = 0;
+let optimisticApplierRuns = 0;
 let acceptedHandlerRuns = 0;
-let rejectedHandlerRuns = 0;
 
 const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
@@ -35,13 +39,9 @@ const replicaTodoCreatedHandler = EventHandler.make(
     const { phase } = yield* applyContext.current;
 
     yield* Effect.sync(() => {
-      replicaHandlerRuns += 1;
-      if (phase === "optimistic") {
-        optimisticHandlerRuns += 1;
-      } else if (phase === "accepted") {
+      if (phase === "accepted") {
+        replicaHandlerRuns += 1;
         acceptedHandlerRuns += 1;
-      } else {
-        rejectedHandlerRuns += 1;
       }
     });
   }),
@@ -106,18 +106,39 @@ const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer("test-repl
   Layer.provide(FakeIndexedDbLayer),
 );
 
+const PrimaryBootstrapLayer = PrimaryProjectionBootstrap.primaryLayer([]);
+
+const BootstrapLayers = Layer.mergeAll(
+  PrimaryBootstrapLayer,
+  ReplicaProjectionBootstrap.replicaLayer([]),
+  HttpProjectionBootstrap.serverLayer.pipe(Layer.provide(PrimaryBootstrapLayer)),
+);
+
+const CountingOptimisticLayer = Layer.succeed(
+  OptimisticEventApplier.OptimisticEventApplier,
+  OptimisticEventApplier.OptimisticEventApplier.of({
+    apply: () =>
+      Effect.sync(() => {
+        optimisticApplierRuns += 1;
+      }),
+    remove: () => Effect.void,
+    clear: Effect.void,
+  }),
+);
+
 const ReplicaSyncEngineLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provide(ReplicaEventRouterLayer),
   Layer.provide(ReplicaDatabaseLayer),
   Layer.provideMerge(ReplicaApplyContext.layer),
   Layer.provideMerge(PrimarySyncEngineLayer),
+  Layer.provideMerge(BootstrapLayers),
+  Layer.provideMerge(CountingOptimisticLayer),
 );
 
 const resetCounters = () => {
   replicaHandlerRuns = 0;
-  optimisticHandlerRuns = 0;
+  optimisticApplierRuns = 0;
   acceptedHandlerRuns = 0;
-  rejectedHandlerRuns = 0;
 };
 
 const waitForPrimaryEvent = (eventId: string): Effect.Effect<void, never, PrimarySyncEngine.PrimarySyncEngine> =>
@@ -141,13 +162,12 @@ const waitForReplicaHandler = (target: number): Effect.Effect<void> =>
 
 layer(ReplicaSyncEngineLayer)((it) => {
   it.effect(
-    "push runs the handler optimistically and forwards to primary in the background",
+    "push applies optimistically via overlay and forwards to primary in the background",
     () =>
       TestClock.withLive(
         Effect.gen(function* () {
           resetCounters();
           const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
-          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
           const sql = yield* SqlClient.SqlClient;
 
           assert.strictEqual(replicaHandlerRuns, 0);
@@ -159,13 +179,11 @@ layer(ReplicaSyncEngineLayer)((it) => {
 
           yield* replica.push(eventInstance);
 
-          assert.strictEqual(replicaHandlerRuns, 1);
-          assert.strictEqual(optimisticHandlerRuns, 1);
-          assert.strictEqual(acceptedHandlerRuns, 0);
+          assert.strictEqual(optimisticApplierRuns, 1);
+          assert.strictEqual(replicaHandlerRuns, 0);
 
           yield* waitForPrimaryEvent(eventInstance.eventId);
-          assert.strictEqual(replicaHandlerRuns, 2);
-          assert.strictEqual(optimisticHandlerRuns, 1);
+          assert.strictEqual(replicaHandlerRuns, 1);
           assert.strictEqual(acceptedHandlerRuns, 1);
 
           const todos = yield* sql<{ id: string; name: string }>`
@@ -178,7 +196,7 @@ layer(ReplicaSyncEngineLayer)((it) => {
   );
 
   it.effect(
-    "push is idempotent — pushing the same event twice runs the handler once",
+    "push is idempotent — pushing the same event twice applies overlay once",
     () =>
       TestClock.withLive(
         Effect.gen(function* () {
@@ -193,8 +211,8 @@ layer(ReplicaSyncEngineLayer)((it) => {
           yield* replica.push(eventInstance);
           yield* replica.push(eventInstance);
 
-          yield* waitForReplicaHandler(2);
-          assert.strictEqual(optimisticHandlerRuns, 1);
+          yield* waitForReplicaHandler(1);
+          assert.strictEqual(optimisticApplierRuns, 1);
           assert.strictEqual(acceptedHandlerRuns, 1);
         }),
       ),
@@ -216,13 +234,13 @@ layer(ReplicaSyncEngineLayer)((it) => {
           });
 
           yield* replica.push(eventInstance);
-          assert.strictEqual(replicaHandlerRuns, 1);
-          assert.strictEqual(optimisticHandlerRuns, 1);
+          assert.strictEqual(optimisticApplierRuns, 1);
+          assert.strictEqual(replicaHandlerRuns, 0);
 
           yield* replica.poke();
 
           yield* waitForPrimaryEvent(eventInstance.eventId);
-          assert.strictEqual(replicaHandlerRuns, 2);
+          assert.strictEqual(replicaHandlerRuns, 1);
           assert.strictEqual(acceptedHandlerRuns, 1);
 
           const eventHistory = yield* primary.pull();
@@ -252,11 +270,11 @@ layer(ReplicaSyncEngineLayer)((it) => {
           yield* replica.poke();
           yield* waitForReplicaHandler(1);
           assert.strictEqual(replicaHandlerRuns, 1);
-          assert.strictEqual(optimisticHandlerRuns, 0);
+          assert.strictEqual(optimisticApplierRuns, 0);
           assert.strictEqual(acceptedHandlerRuns, 1);
 
           yield* replica.poke();
-          yield* waitForReplicaHandler(2);
+          yield* Effect.sleep("100 millis");
           assert.strictEqual(replicaHandlerRuns, 1);
         }),
       ),
@@ -284,15 +302,15 @@ layer(ReplicaSyncEngineLayer)((it) => {
 
           yield* primary.push(remoteEvent);
           yield* replica.push(localEvent);
-          assert.strictEqual(replicaHandlerRuns, 1);
-          assert.strictEqual(optimisticHandlerRuns, 1);
+          assert.strictEqual(optimisticApplierRuns, 1);
+          assert.strictEqual(replicaHandlerRuns, 0);
 
           yield* waitForPrimaryEvent(localEvent.eventId);
           yield* replica.poke();
-          yield* waitForReplicaHandler(3);
+          yield* waitForReplicaHandler(2);
 
-          assert.strictEqual(replicaHandlerRuns, 3);
-          assert.strictEqual(optimisticHandlerRuns, 1);
+          assert.strictEqual(replicaHandlerRuns, 2);
+          assert.strictEqual(optimisticApplierRuns, 1);
           assert.strictEqual(acceptedHandlerRuns, 2);
         }),
       ),

@@ -1,88 +1,94 @@
 import { IndexedDb } from "@effect/platform-browser";
-import { Context, Effect, Layer, ManagedRuntime } from "effect";
+import { Context, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { EventHandler, EventInstance, EventRouter } from "converge/event";
-import { HttpPrimarySyncEngine } from "converge/primary-sync-engine";
-import { IndexedDbProjection, Projection } from "converge/projection";
+import {
+  HttpPrimarySyncEngine,
+} from "converge/primary-sync-engine";
+import {
+  HttpProjectionBootstrap,
+  ReplicaProjectionBootstrap,
+} from "converge/projection-bootstrap";
+import {
+  IndexedDbProjection,
+  OptimisticOverlay,
+  Projection,
+  VisibleProjection,
+} from "converge/projection";
 import {
   IndexedDbReplicaSyncEngine,
-  ReplicaApplyContext,
+  OptimisticEventApplier,
   ReplicaSyncEngine,
 } from "converge/replica-sync-engine";
+import { findTodoReduce } from "./todo-reducers.ts";
 import {
   todoCompletionSet,
   todoCreated,
   todoDeleted,
   TodoListSchema,
   type Todo,
-} from "./todo-events";
+} from "./todo-events.ts";
 
 const projectionStorageKey = "converge-react.todos";
+const todosProjectionKey = "todos";
 
 export class TodoProjection extends Context.Service<
   TodoProjection,
   Projection.IReactiveProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
 >()("TodoProjection") {}
 
-const sortTodos = (todos: ReadonlyArray<Todo>) =>
-  [...todos].sort((left, right) => left.createdAt - right.createdAt);
+export class TodoOverlay extends Context.Service<
+  TodoOverlay,
+  OptimisticOverlay.IOptimisticOverlay<ReadonlyArray<Todo>>
+>()("TodoOverlay") {}
+
+export class TodoVisibleProjection extends Context.Service<
+  TodoVisibleProjection,
+  VisibleProjection.IVisibleProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+>()("TodoVisibleProjection") {}
+
+const saveTodos = (projection: Projection.IReactiveProjection<ReadonlyArray<Todo>>) =>
+  (todos: ReadonlyArray<Todo>) =>
+    projection.mutation(() => [todos, undefined] as const);
 
 const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
-    const todosProjection = yield* TodoProjection;
+    const projection = yield* TodoProjection;
+    const todos = yield* projection.query((snapshot) => snapshot);
+    const reduce = findTodoReduce(event.eventType);
+    if (!reduce) {
+      return;
+    }
 
-    const applyTodoCreated = (todos: ReadonlyArray<Todo>) => {
-      if (todos.some((todo) => todo.id === event.eventDetails.id)) {
-        return [todos, undefined] as const;
-      }
-
-      return [
-        sortTodos([
-          ...todos,
-          {
-            id: event.eventDetails.id,
-            title: event.eventDetails.title,
-            completed: false,
-            createdAt: event.eventDetails.createdAt,
-          },
-        ]),
-        undefined,
-      ] as const;
-    };
-
-    yield* todosProjection.mutation(applyTodoCreated);
+    yield* saveTodos(projection)(reduce(todos, event));
   }),
 );
 
 const replicaTodoCompletionSetHandler = EventHandler.make(
   todoCompletionSet,
   Effect.fn(function* (event) {
-    const todosProjection = yield* TodoProjection;
+    const projection = yield* TodoProjection;
+    const todos = yield* projection.query((snapshot) => snapshot);
+    const reduce = findTodoReduce(event.eventType);
+    if (!reduce) {
+      return;
+    }
 
-    const applyTodoCompletionSet = (todos: ReadonlyArray<Todo>) => [
-      todos.map((todo) =>
-        todo.id === event.eventDetails.id
-          ? { ...todo, completed: event.eventDetails.completed }
-          : todo,
-      ),
-      undefined,
-    ] as const;
-
-    yield* todosProjection.mutation(applyTodoCompletionSet);
+    yield* saveTodos(projection)(reduce(todos, event));
   }),
 );
 
 const replicaTodoDeletedHandler = EventHandler.make(
   todoDeleted,
   Effect.fn(function* (event) {
-    const todosProjection = yield* TodoProjection;
+    const projection = yield* TodoProjection;
+    const todos = yield* projection.query((snapshot) => snapshot);
+    const reduce = findTodoReduce(event.eventType);
+    if (!reduce) {
+      return;
+    }
 
-    const applyTodoDeleted = (todos: ReadonlyArray<Todo>) => [
-      todos.filter((todo) => todo.id !== event.eventDetails.id),
-      undefined,
-    ] as const;
-
-    yield* todosProjection.mutation(applyTodoDeleted);
+    yield* saveTodos(projection)(reduce(todos, event));
   }),
 );
 
@@ -90,21 +96,52 @@ const HttpPrimarySyncEngineLayer = HttpPrimarySyncEngine.layer({
   baseUrl: "/api/sync",
 });
 
+const HttpProjectionBootstrapLayer = HttpProjectionBootstrap.clientLayer({
+  baseUrl: "/api/sync",
+});
+
 const ReplicaEventRouterLayer = EventRouter.layer({
   handlers: [replicaTodoCreatedHandler, replicaTodoCompletionSetHandler, replicaTodoDeletedHandler],
 });
 
-const ReplicaApplyContextLayer = ReplicaApplyContext.layer;
-
-const TodoProjectionLayer = IndexedDbProjection.indexedDbReplicaLayer(TodoProjection, {
+const TodoProjectionLayer = IndexedDbProjection.indexedDbLayer(TodoProjection, {
   databaseName: "converge-react-todos-projection",
   key: projectionStorageKey,
   schema: TodoListSchema,
   initialValue: [] as ReadonlyArray<Todo>,
-}).pipe(
-  Layer.provide(ReplicaApplyContextLayer),
-  Layer.provide(IndexedDb.layerWindow),
-);
+}).pipe(Layer.provide(IndexedDb.layerWindow));
+
+const TodoOverlayLayer = Layer.effect(
+  TodoOverlay,
+  Effect.gen(function* () {
+    const projection = yield* TodoProjection;
+    return yield* OptimisticOverlay.make({
+      projection,
+      findReduce: findTodoReduce,
+    });
+  }),
+).pipe(Layer.provide(TodoProjectionLayer));
+
+const TodoVisibleProjectionLayer = Layer.effect(
+  TodoVisibleProjection,
+  Effect.gen(function* () {
+    const projection = yield* TodoProjection;
+    const overlay = yield* TodoOverlay;
+    return VisibleProjection.make(projection, overlay);
+  }),
+).pipe(Layer.provide(TodoOverlayLayer));
+
+const ReplicaProjectionBootstrapLayer = ReplicaProjectionBootstrap.replicaLayer([
+  {
+    key: todosProjectionKey,
+    importSnapshot: (snapshot) =>
+      Effect.gen(function* () {
+        const projection = yield* TodoProjection;
+        const todos = yield* Schema.decodeUnknown(TodoListSchema)(snapshot);
+        yield* saveTodos(projection)(todos);
+      }),
+  },
+]);
 
 const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
   "converge-react-todos-replica",
@@ -113,9 +150,25 @@ const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
 const ReplicaTodoLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provide(ReplicaEventRouterLayer),
   Layer.provide(ReplicaDatabaseLayer),
-  Layer.provideMerge(ReplicaApplyContextLayer),
   Layer.provideMerge(TodoProjectionLayer),
+  Layer.provideMerge(TodoOverlayLayer),
+  Layer.provideMerge(TodoVisibleProjectionLayer),
+  Layer.provideMerge(ReplicaProjectionBootstrapLayer),
   Layer.provideMerge(HttpPrimarySyncEngineLayer),
+  Layer.provideMerge(HttpProjectionBootstrapLayer),
+  Layer.provide(
+    Layer.effect(
+      OptimisticEventApplier.OptimisticEventApplier,
+      Effect.gen(function* () {
+        const overlay = yield* TodoOverlay;
+        return OptimisticEventApplier.OptimisticEventApplier.of({
+          apply: overlay.apply,
+          remove: overlay.remove,
+          clear: overlay.clear,
+        });
+      }),
+    ).pipe(Layer.provide(TodoOverlayLayer)),
+  ),
 );
 
 const replicaRuntime = ManagedRuntime.make(ReplicaTodoLayer, {
@@ -130,7 +183,7 @@ const makeTodoId = () =>
 const runReplica = <A, E>(effect: Effect.Effect<A, E, ReplicaSyncEngine.ReplicaSyncEngine>) =>
   replicaRuntime.runPromise(effect);
 
-export const getTodoProjection = () => replicaRuntime.runPromise(TodoProjection);
+export const getTodoProjection = () => replicaRuntime.runPromise(TodoVisibleProjection);
 
 export const createTodo = (title: string) => {
   const trimmedTitle = title.trim();
@@ -176,5 +229,23 @@ export const syncTodos = () =>
       const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
 
       yield* replica.poke();
+    }),
+  );
+
+export const checkoutTodos = (syncAnchor: string) =>
+  runReplica(
+    Effect.gen(function* () {
+      const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+
+      yield* replica.checkout(syncAnchor);
+    }),
+  );
+
+export const returnTodosToLatest = () =>
+  runReplica(
+    Effect.gen(function* () {
+      const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+
+      yield* replica.setLatest();
     }),
   );
