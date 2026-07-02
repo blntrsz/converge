@@ -11,7 +11,7 @@ export type SyncMode =
     }
   | {
       readonly _tag: "Checkout";
-      readonly eventHistoryId: string;
+      readonly eventId: string;
     };
 
 /**
@@ -52,13 +52,13 @@ export interface IReplicaSyncEngine {
   poke(): Effect.Effect<void>;
 
   /**
-   * Pins the replica to a historical event history id. Checkout mode is read-only:
+   * Pins the replica to a historical eventId. Checkout mode is read-only:
    * push and poke are no-ops until the replica returns to Latest.
    *
    * @since 0.0.0
    * @category service-method-interface
    */
-  checkout(eventHistoryId: string): Effect.Effect<void>;
+  checkout(eventId: string): Effect.Effect<void>;
 
   /**
    * Returns the replica to Latest mode.

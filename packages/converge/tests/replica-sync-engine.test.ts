@@ -322,7 +322,7 @@ layer(ReplicaSyncEngineLayer)((it) => {
 
           assert.deepStrictEqual(yield* replica.mode, {
             _tag: "Checkout",
-            eventHistoryId: remoteEvent.eventId,
+            eventId: remoteEvent.eventId,
           });
 
           yield* replica.push(localEvent);
