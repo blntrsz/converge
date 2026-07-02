@@ -25,28 +25,12 @@ One recorded occurrence of an Event, identified by a unique eventId and carrying
 _Avoid_: Event record, message instance
 
 **Projection**:
-A read-only, queryable view of state derived from storage. EventHandlers write storage directly; the projection reflects that storage. Used to bootstrap a replica from a snapshot so the full event log need not be replayed. After bootstrap, the replica continues syncing from a sync anchor onward.
-_Avoid_: Read model, cache, write model
+A derived, queryable view of state built by applying EventInstances. Used to bootstrap a replica from a snapshot so the full event log need not be replayed. After bootstrap, the replica continues syncing from an anchor eventId onward.
+_Avoid_: Read model, cache, database
 
 **Sync anchor**:
-The eventId corresponding to the replica sync engine's active version sequence. One per replica, shared across all projections. Marks where incremental event-log sync begins after bootstrap.
-_Avoid_: Cursor, checkpoint, offset, per-projection cursor
-
-**Sync mode**:
-How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic overlay is disabled. Returning to Latest re-bootstraps all projections to head, re-seeds the anchor event, and resumes normal sync.
-_Avoid_: Live mode, replay mode, follow mode
-
-**Primary storage**:
-Versioned record storage on the primary. Each handler accept appends a new row with a `since` sequence. Bootstrap reads are anchored queries over this history.
-_Avoid_: Write model, source table
-
-**Version sequence**:
-The monotonic position of an accepted EventInstance in the event log. Primary storage records are versioned with a `since` sequence; an anchored bootstrap read returns the latest record version per entity where `since` ≤ anchor sequence.
-_Avoid_: Revision, generation, lamport clock
-
-**Replica storage**:
-Flat materialized storage on the replica. Bootstrap writes a decoded snapshot once; subsequent handler accepts overwrite in place. Keeps local data bounded — version history stays on the primary only.
-_Avoid_: Client database, local cache, IndexedDB mirror
+The eventId marking where incremental event-log sync begins for a specific projection after its snapshot is applied. Each projection has its own sync anchor; a replica may host multiple projections sharing one replica event log.
+_Avoid_: Cursor, checkpoint, offset
 
 **Replica event log**:
 The replica's local `event_history` of accepted EventInstances. Retains only the latest 100 events globally per replica; older events live on the primary only.
@@ -57,67 +41,47 @@ The primary's accept or reject decision on a pushed EventInstance.
 _Avoid_: Validation result, success/failure, admission
 
 **Accepted**:
-A verdict where the primary stored the EventInstance. The replica persists it to the replica event log, runs the handler to write storage, and clears the in-memory optimistic overlay for that event.
+A verdict where the primary stored the EventInstance. The replica persists it to the replica event log and commits the projection mutation.
 _Avoid_: Committed, succeeded
 
 **Rejected**:
-A verdict where the primary refused the EventInstance. The replica clears the in-memory optimistic overlay for that event without writing storage.
+A verdict where the primary refused the EventInstance. The replica rolls back the optimistic projection mutation.
 _Avoid_: Failed, denied
-
-**Optimistic overlay**:
-An in-memory layer on the replica that holds tentative state for Proposed Events. On push, pure reduce functions (shared with replica handlers) apply events to the overlay snapshot. A composed view merges the read-only projection with this overlay for UI. Never persisted; discarded on accept (after storage write) or reject.
-_Avoid_: Pending state, draft projection, optimistic cache
-
-**Reduce function**:
-A pure function `apply(snapshot, event) → snapshot` encoding how one EventInstance updates projection state. Shared by primary handlers (via versioned storage writes), replica handlers (flat storage on accept), and the optimistic overlay (on push). The unit of handler equivalence.
-_Avoid_: Reducer, projector, event applier
-
-**Visible projection**:
-The merged read surface for UI: read-only projection over committed storage plus the optimistic overlay. Exposed as a composed reactive atom.
-_Avoid_: Live query, merged read model, display projection
 
 **Proposed Event**:
 An EventInstance the replica has applied optimistically but the primary has not yet accepted or rejected. Stored locally until the verdict arrives.
 _Avoid_: Pending event, draft event, uncommitted event
 
 **Push**:
-Replica originates an EventInstance — applies it optimistically in memory, stores it as a Proposed Event, and forwards it to the primary for verdict. Storage is not written until the event is accepted.
+Replica originates an EventInstance — applies it optimistically, stores it as a Proposed Event, and forwards it to the primary for verdict.
 _Avoid_: Submit, send, publish
 
 **Poke**:
-Replica requests reconcile — pulls accepted events from the primary since the last known position and applies them locally. On the first poke, bootstraps if not yet initialized.
+Replica requests reconcile — pulls accepted events from the primary since the last known position and applies them locally.
 _Avoid_: Sync, refresh, pull
 
-**Repair**:
-Recovery from a broken event chain (missing or out-of-order accepted events). Sync halts, then re-bootstraps all projections at the active sync mode's sequence and resumes. No partial repair.
-_Avoid_: Resync, heal, rebuild
-
 **Primary projection**:
-A read-only projection on the primary, derived from primary storage updated by primary handlers. Replicas pull its snapshot on cold start to bootstrap local state without replaying history.
+A projection persisted on the primary, built from the full event log. Replicas pull it on cold start to bootstrap local state without replaying history.
 _Avoid_: Server read model, materialized view, cache
 
 **Bootstrap**:
-Hydrating a replica's projections from primary flat snapshots at the sync engine's active version sequence. Triggered on the first `poke`, when checking out an older version sequence, or when returning from Checkout to Latest. Each projection is fetched separately: `GET /bootstrap/{projectionKey}?syncAnchor=<eventId>`. Seeds `event_history` with the real anchor EventInstance so pull can resume from `lastEventId()` — handlers are not re-run for the seeded event; the imported snapshot already reflects it.
+Hydrating a replica's local projection from a primary projection snapshot plus sync anchor, then continuing incremental sync from the event log.
 _Avoid_: Initial sync, full replay, migration
-
-**Versioned projection**:
-Primary storage keeps every version of each record keyed by `since` sequence. Bootstrap encodes an anchored flat snapshot per projection: `GET /bootstrap/{projectionKey}?syncAnchor=<eventId>`. The primary resolves the anchor to a sequence, queries `since ≤ sequence`, and returns a materialized snapshot for replica storage. New events between fetches do not affect an anchored read.
-_Avoid_: Point-in-time read, historical snapshot
 
 **Event log**:
 The primary's append-only store of accepted EventInstances. The source of truth; projections and replicas are derived from it.
 _Avoid_: Event store, database, table
 
 **Primary handler**:
-An EventHandler that runs on the primary, writing primary storage (e.g. Postgres). Separate from the replica handler for the same Event — different runtime, different storage backend.
+An EventHandler that runs on the primary, updating a server-side projection (e.g. SQL). Separate from the replica handler for the same Event — different runtime, different storage.
 _Avoid_: Server handler, backend handler
 
 **Replica handler**:
-An EventHandler that runs on the replica, writing replica storage (e.g. IndexedDB). Separate from the primary handler for the same Event — different runtime, different storage backend.
+An EventHandler that runs on the replica, updating a client-side projection (e.g. IndexedDB). Separate from the primary handler for the same Event — different runtime, different storage.
 _Avoid_: Client handler, frontend handler
 
 **Handler equivalence**:
-Primary and replica handlers are separate implementations with different storage shapes (versioned vs flat), but the same event sequence must produce the same projection snapshot on both sides. Handlers must be idempotent — re-applying an event already reflected in storage is a no-op.
+Primary and replica handlers are separate implementations, but the same event sequence must produce the same projection snapshot on both sides.
 _Avoid_: Shared handler, identical handler
 
-A replica hosts one or more projections. All projections share one replica event log and one sync anchor.
+Each projection has its own sync anchor. A replica may host multiple projections, but all share one replica event log.
