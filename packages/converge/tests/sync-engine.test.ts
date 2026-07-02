@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Effect, Layer, Result, Schema } from "effect";
+import { Effect, Layer, Option, Result, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import {
@@ -114,6 +114,16 @@ const PrimarySyncEngineOnlyLayer = PostgresPrimarySyncEngine.layer.pipe(
 );
 
 layer(PrimarySyncEngineLayer)((it) => {
+  it.effect("getLatestEvent returns none on empty log", () =>
+    Effect.gen(function* () {
+      const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+
+      const latest = yield* engine.getLatestEvent();
+
+      assert.isTrue(Option.isNone(latest));
+    }),
+  );
+
   it.effect("pushes a todo Event through the primary sync engine", () =>
     Effect.gen(function* () {
       const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
@@ -214,6 +224,50 @@ layer(PrimarySyncEngineLayer)((it) => {
     }),
   );
 
+  it.effect("getLatestEvent returns the last accepted event", () =>
+    Effect.gen(function* () {
+      const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+      todoRetryCountedHandlerRuns = 0;
+
+      const firstEvent = yield* EventInstance.make(todoRetryCounted, {
+        id: "latest-1",
+      });
+      const secondEvent = yield* EventInstance.make(todoRetryCounted, {
+        id: "latest-2",
+      });
+
+      yield* engine.push(firstEvent, secondEvent);
+
+      const latest = yield* engine.getLatestEvent();
+      if (Option.isNone(latest)) {
+        assert.fail("expected getLatestEvent to return the last pushed event");
+      }
+      assert.strictEqual(latest.value.eventId, secondEvent.eventId);
+    }),
+  );
+
+  it.effect("getEvent returns the pushed event by id and none for an unknown id", () =>
+    Effect.gen(function* () {
+      const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+      todoRetryCountedHandlerRuns = 0;
+
+      const event = yield* EventInstance.make(todoRetryCounted, {
+        id: "get-1",
+      });
+
+      yield* engine.push(event);
+
+      const found = yield* engine.getEvent(event.eventId);
+      if (Option.isNone(found)) {
+        assert.fail("expected getEvent to return the pushed event");
+      }
+      assert.strictEqual(found.value.eventId, event.eventId);
+
+      const missing = yield* engine.getEvent("unknown-event-id");
+      assert.isTrue(Option.isNone(missing));
+    }),
+  );
+
   it.effect("serves primary sync over HTTP", () => {
     const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineOnlyLayer, {
       prefix: "/sync",
@@ -259,6 +313,57 @@ layer(PrimarySyncEngineLayer)((it) => {
         id: "http-1",
         name: "Buy coffee",
       });
+    }).pipe(
+      Effect.provide(
+        HttpPrimarySyncEngine.layer({
+          baseUrl: "http://test/sync",
+          fetch,
+        }),
+      ),
+      Effect.ensuring(Effect.promise(() => server.dispose())),
+    );
+  });
+
+  it.effect("serves getLatestEvent and getEvent over HTTP", () => {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineOnlyLayer, {
+      prefix: "/sync",
+      disableLogger: true,
+    });
+    const fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      server.handler(
+        new Request(input instanceof Request ? input.url : String(input), init),
+      )) as typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+      todoRetryCountedHandlerRuns = 0;
+
+      const latestOnEmpty = yield* engine.getLatestEvent();
+      assert.isTrue(Option.isNone(latestOnEmpty));
+
+      const firstEvent = yield* EventInstance.make(todoRetryCounted, {
+        id: "http-latest-1",
+      });
+      const secondEvent = yield* EventInstance.make(todoRetryCounted, {
+        id: "http-latest-2",
+      });
+
+      yield* engine.push(firstEvent, secondEvent);
+
+      const latest = yield* engine.getLatestEvent();
+      if (Option.isNone(latest)) {
+        assert.fail("expected HTTP getLatestEvent to return the last pushed event");
+      }
+      assert.strictEqual(latest.value.eventId, secondEvent.eventId);
+
+      const found = yield* engine.getEvent(secondEvent.eventId);
+      if (Option.isNone(found)) {
+        assert.fail("expected HTTP getEvent to return the pushed event");
+      }
+      assert.strictEqual(found.value.eventId, secondEvent.eventId);
+
+      const missing = yield* engine.getEvent("http-unknown-event-id");
+      assert.isTrue(Option.isNone(missing));
     }).pipe(
       Effect.provide(
         HttpPrimarySyncEngine.layer({
