@@ -9,6 +9,7 @@ import {
   EventRouter,
   HttpPrimarySyncEngine,
   PostgresPrimarySyncEngine,
+  PrimaryProjectionBootstrap,
   PrimarySyncEngine,
 } from "../src/index.ts";
 import { PgliteSqlClient } from "../src/pglite-client.ts";
@@ -103,13 +104,19 @@ const EventRouterLayer = EventRouter.layer({
   ],
 });
 
+const PrimaryProjectionBootstrapLayer = PrimaryProjectionBootstrap.layer({
+  encoders: [],
+});
+
 const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provideMerge(EventRouterLayer),
+  Layer.provideMerge(PrimaryProjectionBootstrapLayer),
   Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 
 const PrimarySyncEngineOnlyLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provide(EventRouterLayer),
+  Layer.provide(PrimaryProjectionBootstrapLayer),
   Layer.provide(PgSqlClientWithAllMigrations),
 );
 

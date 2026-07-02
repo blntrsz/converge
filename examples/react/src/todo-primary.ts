@@ -3,6 +3,7 @@ import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { EventHandler, EventRouter } from "converge/event";
 import { PostgresPrimarySyncEngine } from "converge/primary-sync-engine";
+import { PrimaryProjectionBootstrap } from "converge/projection-bootstrap";
 import { PgliteSqlClient } from "../../../packages/converge/src/pglite-client.ts";
 import {
   todoCompletionSet,
@@ -84,8 +85,13 @@ const PrimaryEventRouterLayer = EventRouter.layer({
   handlers: [todoCreatedHandler, todoCompletionSetHandler, todoDeletedHandler],
 });
 
+const PrimaryProjectionBootstrapLayer = PrimaryProjectionBootstrap.layer({
+  encoders: [],
+});
+
 export const PrimaryTodoLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provideMerge(PrimaryEventRouterLayer),
+  Layer.provideMerge(PrimaryProjectionBootstrapLayer),
   Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 

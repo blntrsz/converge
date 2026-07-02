@@ -7,6 +7,7 @@
     "./event": "./src/event/index.ts",
     "./primary-sync-engine": "./src/primary-sync-engine/index.ts",
     "./projection": "./src/projection/index.ts",
+    "./projection-bootstrap": "./src/projection-bootstrap/index.ts",
     "./replica-sync-engine": "./src/replica-sync-engine/index.ts"
   },
   "scripts": {

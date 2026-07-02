@@ -41,6 +41,25 @@ export interface IPrimarySyncEngine {
    * @category service-method-interface
    */
   getEvent(eventId: string): Effect.Effect<Option.Option<EventInstance.EventInstance>>;
+
+  /**
+   * @since 0.0.0
+   * @category service-method-interface
+   */
+  bootstrap(
+    projectionKey: string,
+    eventId: string,
+  ): Effect.Effect<Option.Option<ProjectionBootstrapSnapshot>>;
+}
+
+/**
+ * @since 0.0.0
+ * @category type
+ */
+export interface ProjectionBootstrapSnapshot {
+  readonly projectionKey: string;
+  readonly snapshot: unknown;
+  readonly anchorEvent: EventInstance.EventInstance;
 }
 
 /**

@@ -3,7 +3,12 @@ import { SqlClient, SqlSchema } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { EventInstance } from "../../event/event-instance.ts";
 import { EventRouterService } from "../../event/event-router.ts";
-import { PrimarySyncEngine, type IPrimarySyncEngine } from "../services/primary-sync-engine.ts";
+import { PrimaryProjectionBootstrapService } from "../../projection-bootstrap/services/primary-projection-bootstrap.ts";
+import {
+  PrimarySyncEngine,
+  type IPrimarySyncEngine,
+  type ProjectionBootstrapSnapshot,
+} from "../services/primary-sync-engine.ts";
 
 const PullPageSize = 100;
 
@@ -44,12 +49,13 @@ export const migrationsLayer = Layer.effectDiscard(Migrator.make({})({ loader: m
 export const layer: Layer.Layer<
   PrimarySyncEngine,
   never,
-  SqlClient.SqlClient | EventRouterService
+  SqlClient.SqlClient | EventRouterService | PrimaryProjectionBootstrapService
 > = Layer.effect(
   PrimarySyncEngine,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const eventRouter = yield* EventRouterService;
+    const projectionBootstrap = yield* PrimaryProjectionBootstrapService;
 
     const pullEvents = SqlSchema.findAll({
       Request: Schema.Struct({
@@ -104,6 +110,27 @@ export const layer: Layer.Layer<
       Result: EventInstance,
       execute: (input) => sql`
         SELECT
+          event_id,
+          event_type,
+          event_details
+        FROM event_history
+        WHERE event_id = ${input.eventId}
+      `,
+    });
+
+    const getBootstrapAnchorQuery = SqlSchema.findAll({
+      Request: Schema.Struct({
+        eventId: Schema.String,
+      }),
+      Result: Schema.Struct({
+        eventHistoryId: Schema.String,
+        eventId: Schema.String,
+        eventType: Schema.String,
+        eventDetails: Schema.Unknown,
+      }),
+      execute: (input) => sql`
+        SELECT
+          id::text AS event_history_id,
           event_id,
           event_type,
           event_details
@@ -239,11 +266,46 @@ export const layer: Layer.Layer<
       },
     );
 
+    /**
+     * @since 0.0.0
+     * @category service-method
+     */
+    const bootstrap: IPrimarySyncEngine["bootstrap"] = Effect.fn("PrimarySyncEngine.bootstrap")(
+      function* (projectionKey, eventId) {
+        const rows = yield* getBootstrapAnchorQuery({ eventId }).pipe(Effect.orDie);
+        const anchorRow = Array.head(rows);
+        if (Option.isNone(anchorRow)) {
+          return Option.none();
+        }
+
+        const encoder = projectionBootstrap.find(projectionKey);
+        if (!encoder) {
+          return Option.none();
+        }
+
+        const snapshot = yield* encoder.encode({
+          eventHistoryId: anchorRow.value.eventHistoryId,
+        });
+        const anchorEvent = new EventInstance({
+          eventId: anchorRow.value.eventId,
+          eventType: anchorRow.value.eventType,
+          eventDetails: anchorRow.value.eventDetails,
+        });
+
+        return Option.some({
+          projectionKey,
+          snapshot,
+          anchorEvent,
+        } satisfies ProjectionBootstrapSnapshot);
+      },
+    );
+
     return PrimarySyncEngine.of({
       pull,
       push,
       getLatestEvent,
       getEvent,
+      bootstrap,
     });
   }),
 );
