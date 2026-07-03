@@ -5,7 +5,11 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http";
 import { EventInstance } from "../../event/event-instance.ts";
-import { PrimarySyncEngine, type IPrimarySyncEngine } from "../services/primary-sync-engine.ts";
+import {
+  PrimarySyncEngine,
+  type IPrimarySyncEngine,
+  type ProjectionBootstrapSnapshot,
+} from "../services/primary-sync-engine.ts";
 
 /**
  * @since 0.0.0
@@ -108,6 +112,22 @@ export const WireEventResponse = Schema.Struct({
  */
 export type WireEventResponse = typeof WireEventResponse.Type;
 
+/**
+ * @since 0.0.0
+ * @category schema
+ */
+export const WireBootstrapResponse = Schema.Struct({
+  projectionKey: Schema.String,
+  snapshot: Schema.Unknown,
+  anchorEvent: WireEvent,
+});
+
+/**
+ * @since 0.0.0
+ * @category schema
+ */
+export type WireBootstrapResponse = typeof WireBootstrapResponse.Type;
+
 type PrimarySyncPullPage =
   | {
       readonly data: EventInstance[];
@@ -208,6 +228,26 @@ export const eventResponseToWire = (
   }),
 });
 
+/**
+ * @since 0.0.0
+ * @category encoding
+ */
+export const bootstrapFromWire = (response: WireBootstrapResponse): ProjectionBootstrapSnapshot => ({
+  projectionKey: response.projectionKey,
+  snapshot: response.snapshot,
+  anchorEvent: eventFromWire(response.anchorEvent),
+});
+
+/**
+ * @since 0.0.0
+ * @category encoding
+ */
+export const bootstrapToWire = (snapshot: ProjectionBootstrapSnapshot): WireBootstrapResponse => ({
+  projectionKey: snapshot.projectionKey,
+  snapshot: snapshot.snapshot,
+  anchorEvent: eventToWire(snapshot.anchorEvent),
+});
+
 const pullPrimary = (cursor?: string) =>
   Effect.gen(function* () {
     const primary = yield* PrimarySyncEngine;
@@ -234,6 +274,13 @@ const getEventPrimary = (eventId: string) =>
     const primary = yield* PrimarySyncEngine;
 
     return yield* primary.getEvent(eventId);
+  });
+
+const bootstrapPrimary = (projectionKey: string, eventId: string) =>
+  Effect.gen(function* () {
+    const primary = yield* PrimarySyncEngine;
+
+    return yield* primary.bootstrap(projectionKey, eventId);
   });
 
 const json = (body: unknown, status?: number) =>
@@ -318,6 +365,32 @@ export const routesLayer = (options?: RoutesLayerOptions) =>
             return json(eventResponseToWire(event));
           }),
       ),
+
+      HttpRouter.route(
+        "GET",
+        "/bootstrap/:projectionKey",
+        (request) =>
+          Effect.gen(function* () {
+            const params = yield* HttpRouter.params;
+            const projectionKey = params.projectionKey;
+            if (!projectionKey) {
+              return badRequest("Expected projectionKey path parameter");
+            }
+
+            const url = new URL(request.originalUrl, "http://localhost");
+            const eventId = url.searchParams.get("eventId");
+            if (!eventId) {
+              return badRequest("Expected eventId query parameter");
+            }
+
+            const snapshot = yield* bootstrapPrimary(projectionKey, eventId);
+            if (Option.isNone(snapshot)) {
+              return json({ message: "Bootstrap snapshot not found" }, 404);
+            }
+
+            return json(bootstrapToWire(snapshot.value));
+          }),
+      ),
     ] as const,
     options?.prefix ? { prefix: options.prefix } : undefined,
   );
@@ -358,7 +431,12 @@ export interface LayerOptions {
 
 const endpointUrl = (
   baseUrl: string | URL,
-  endpoint: "/pull" | "/push" | "/events/latest" | `/events/${string}`,
+  endpoint:
+    | "/pull"
+    | "/push"
+    | "/events/latest"
+    | `/events/${string}`
+    | `/bootstrap/${string}`,
   search?: Record<string, string>,
 ) => {
   const url = `${baseUrl}`.replace(/\/+$/, "") + endpoint;
@@ -373,6 +451,7 @@ const endpointUrl = (
 const decodePullPage = Schema.decodeUnknownEffect(WirePullPage);
 const decodePushResponse = Schema.decodeUnknownEffect(WirePushResponse);
 const decodeEventResponse = Schema.decodeUnknownEffect(WireEventResponse);
+const decodeBootstrapResponse = Schema.decodeUnknownEffect(WireBootstrapResponse);
 
 /**
  * @since 0.0.0
@@ -459,6 +538,35 @@ export const layer = (options: LayerOptions): Layer.Layer<PrimarySyncEngine> => 
       Effect.orDie,
     );
 
+  const bootstrap: IPrimarySyncEngine["bootstrap"] = (projectionKey, eventId) =>
+    Effect.tryPromise({
+      async try() {
+        const response = await fetch(
+          endpointUrl(
+            options.baseUrl,
+            `/bootstrap/${encodeURIComponent(projectionKey)}`,
+            { eventId },
+          ),
+        );
+        if (response.status === 404) {
+          return null;
+        }
+        if (!response.ok) {
+          throw new Error(`Bootstrap failed with ${response.status}`);
+        }
+
+        return await response.json();
+      },
+      catch: (error) => error,
+    }).pipe(
+      Effect.flatMap((body) =>
+        body === null
+          ? Effect.succeed(Option.none())
+          : decodeBootstrapResponse(body).pipe(Effect.map(bootstrapFromWire), Effect.map(Option.some)),
+      ),
+      Effect.orDie,
+    );
+
   return Layer.succeed(
     PrimarySyncEngine,
     PrimarySyncEngine.of({
@@ -466,6 +574,7 @@ export const layer = (options: LayerOptions): Layer.Layer<PrimarySyncEngine> => 
       push,
       getLatestEvent,
       getEvent,
+      bootstrap,
     }),
   );
 };
