@@ -5,7 +5,7 @@ import { Context, Effect, Layer, type Effect as EffectType } from "effect";
  * @category type
  */
 export interface BootstrapAnchor {
-  readonly eventHistoryId: string;
+  readonly eventId: string;
 }
 
 /**

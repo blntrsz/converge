@@ -70,7 +70,9 @@ const todosEncoder = {
     return yield* sql<{ id: string; name: string }>`
       SELECT DISTINCT ON (id) id, name
       FROM todo_versions
-      WHERE since <= ${anchor.eventHistoryId}
+      WHERE since <= (
+        SELECT id FROM event_history WHERE event_id = ${anchor.eventId}
+      )
       ORDER BY id, since DESC
     `.pipe(Effect.orDie);
   }),

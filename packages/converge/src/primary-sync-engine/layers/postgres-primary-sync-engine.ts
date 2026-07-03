@@ -123,14 +123,12 @@ export const layer: Layer.Layer<
         eventId: Schema.String,
       }),
       Result: Schema.Struct({
-        eventHistoryId: Schema.String,
         eventId: Schema.String,
         eventType: Schema.String,
         eventDetails: Schema.Unknown,
       }),
       execute: (input) => sql`
         SELECT
-          id::text AS event_history_id,
           event_id,
           event_type,
           event_details
@@ -284,7 +282,7 @@ export const layer: Layer.Layer<
         }
 
         const snapshot = yield* encoder.encode({
-          eventHistoryId: anchorRow.value.eventHistoryId,
+          eventId: anchorRow.value.eventId,
         });
         const anchorEvent = new EventInstance({
           eventId: anchorRow.value.eventId,
