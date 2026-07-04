@@ -12,6 +12,5 @@ export type {
 } from "./services/projection";
 export type {
   IPrimaryProjection,
-  PrimaryProjectionPage,
 } from "./services/primary-projection";
 export { ProjectionStorageError } from "./services/projection";

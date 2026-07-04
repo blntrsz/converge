@@ -1,11 +1,17 @@
-import { Array, Effect, Layer, Schema } from "effect";
+import { Array, Effect, Layer, Option, Schema, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { identifier, literal } from "effect/unstable/sql/Statement";
 import { make as makeRegistry, PrimaryProjectionRegistry } from "../services/primary-projection-registry.ts";
-import type { IPrimaryProjection, PrimaryProjectionPage } from "../services/primary-projection.ts";
+import type { IPrimaryProjection } from "../services/primary-projection.ts";
 
 const DefaultSinceColumn = "since";
-const DefaultPageSize = 100;
+const DefaultStreamPageSize = 100;
+
+type ProjectionPage<TEntity> = {
+  readonly data: ReadonlyArray<TEntity>;
+  readonly hasNext: boolean;
+  readonly cursor?: string;
+};
 
 /**
  * @since 0.0.0
@@ -22,6 +28,7 @@ export interface PostgresPrimaryProjectionOptions<TEntity> {
   };
   readonly columns: ReadonlyArray<string>;
   readonly deletedColumn?: string;
+  readonly streamPageSize?: number;
 }
 
 const assertIdentifier = (identifier: string) => {
@@ -44,6 +51,7 @@ export const make = <TEntity>(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const sinceColumn = options.sinceColumn ?? DefaultSinceColumn;
+    const streamPageSize = options.streamPageSize ?? DefaultStreamPageSize;
     const decodeEntity = Schema.decodeUnknownEffect(options.entitySchema);
 
     yield* assertIdentifier(options.table);
@@ -74,21 +82,12 @@ export const make = <TEntity>(
     const deleted = options.deletedColumn ? identifier(options.deletedColumn) : undefined;
     const selectColumns = literal([options.entityIdColumn, ...options.columns].join(", "));
 
-    const list = (
-      eventId: string,
-      listOptions?: {
-        readonly cursor?: string;
-        readonly limit?: number;
-      },
-    ): Effect.Effect<PrimaryProjectionPage<TEntity>> =>
+    const fetchPage = (
+      sequence: number,
+      cursor?: string,
+    ): Effect.Effect<ProjectionPage<TEntity>> =>
       Effect.gen(function* () {
-        const sequence = yield* sequenceAt(eventId);
-        if (sequence === undefined) {
-          return { data: [], hasNext: false };
-        }
-
-        const limit = listOptions?.limit ?? DefaultPageSize;
-        const cursor = listOptions?.cursor;
+        const limit = streamPageSize;
 
         const rows = cursor
           ? deleted
@@ -167,9 +166,31 @@ export const make = <TEntity>(
         };
       });
 
+    const stream = (eventId: string): Stream.Stream<TEntity> =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const sequence = yield* sequenceAt(eventId);
+          if (sequence === undefined) {
+            return Stream.empty;
+          }
+
+          return Stream.paginate<string | undefined, TEntity>(undefined, (cursor) =>
+            Effect.gen(function* () {
+              const page = yield* fetchPage(sequence, cursor);
+              const next =
+                page.hasNext && page.cursor !== undefined
+                  ? Option.some(page.cursor)
+                  : Option.none<string>();
+
+              return [page.data, next] as const;
+            }),
+          );
+        }),
+      );
+
     return {
       key: options.key,
-      list,
+      stream,
     };
   });
 

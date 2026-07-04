@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Option } from "effect";
-import { listAll, type IPrimaryProjection } from "./primary-projection.ts";
+import { collectAll, type IPrimaryProjection } from "./primary-projection.ts";
 
 /**
  * @since 0.0.0
@@ -44,7 +44,7 @@ export function make(
           return Option.none();
         }
 
-        return Option.some(yield* listAll(projection, eventId));
+        return Option.some(yield* collectAll(projection, eventId));
       }),
   };
 }

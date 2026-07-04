@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Effect, Layer, Option, Result, Schema } from "effect";
+import { Effect, Layer, Option, Result, Schema, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import {
@@ -76,6 +76,7 @@ const todosPrimaryProjectionConfig = {
   entityIdColumn: "id",
   entitySchema: TodoSchema,
   columns: ["name"],
+  streamPageSize: 2,
 } satisfies PostgresPrimaryProjection.PostgresPrimaryProjectionOptions<Todo>;
 
 const migrations = Migrator.fromRecord({
@@ -130,7 +131,7 @@ const resetPrimaryData = Effect.gen(function* () {
 });
 
 layer(PrimarySyncEngineLayer)((it) => {
-  it.effect("lists versioned todos at a sync position eventId", () =>
+  it.effect("streams versioned todos at a sync position eventId", () =>
     Effect.gen(function* () {
       yield* resetPrimaryData;
       const registry = yield* PrimaryProjectionRegistry.PrimaryProjectionRegistry;
@@ -148,22 +149,21 @@ layer(PrimarySyncEngineLayer)((it) => {
       }
       const projection = projectionOption.value;
 
-      const page1 = yield* projection.list(event1.eventId);
-      assert.deepStrictEqual(page1.data, [{ id: "1", name: "A" }]);
-      assert.isFalse(page1.hasNext);
+      const atEvent1 = yield* Stream.runCollect(projection.stream(event1.eventId));
+      assert.deepStrictEqual(atEvent1, [{ id: "1", name: "A" }]);
 
-      const page2 = yield* projection.list(event2.eventId);
-      assert.deepStrictEqual(page2.data, [{ id: "1", name: "B" }]);
+      const atEvent2 = yield* Stream.runCollect(projection.stream(event2.eventId));
+      assert.deepStrictEqual(atEvent2, [{ id: "1", name: "B" }]);
 
-      const page3 = yield* projection.list(event3.eventId);
-      assert.deepStrictEqual(page3.data, [
+      const atEvent3 = yield* Stream.runCollect(projection.stream(event3.eventId));
+      assert.deepStrictEqual(atEvent3, [
         { id: "1", name: "B" },
         { id: "2", name: "C" },
       ]);
     }),
   );
 
-  it.effect("paginates entities ordered by entity id", () =>
+  it.effect("streams entities in entity id order across pages", () =>
     Effect.gen(function* () {
       yield* resetPrimaryData;
       const registry = yield* PrimaryProjectionRegistry.PrimaryProjectionRegistry;
@@ -187,24 +187,22 @@ layer(PrimarySyncEngineLayer)((it) => {
       const projection = projectionOption.value;
 
       const anchorEventId = events[events.length - 1]!.eventId;
-      const firstPage = yield* projection.list(anchorEventId, { limit: 2 });
-      assert.strictEqual(firstPage.data.length, 2);
-      assert.isTrue(firstPage.hasNext);
-      assert.strictEqual(firstPage.cursor, "todo-1");
+      const streamed = yield* Stream.runCollect(projection.stream(anchorEventId));
+      assert.deepStrictEqual(streamed, [
+        { id: "todo-0", name: "Todo 0" },
+        { id: "todo-1", name: "Todo 1" },
+        { id: "todo-2", name: "Todo 2" },
+        { id: "todo-3", name: "Todo 3" },
+        { id: "todo-4", name: "Todo 4" },
+      ]);
 
-      const secondPage = yield* projection.list(anchorEventId, {
-        limit: 2,
-        cursor: firstPage.cursor,
-      });
-      assert.strictEqual(secondPage.data.length, 2);
-      assert.isTrue(secondPage.hasNext);
-
-      const thirdPage = yield* projection.list(anchorEventId, {
-        limit: 2,
-        cursor: secondPage.cursor,
-      });
-      assert.strictEqual(thirdPage.data.length, 1);
-      assert.isFalse(thirdPage.hasNext);
+      const firstChunk = yield* Stream.runCollect(
+        projection.stream(anchorEventId).pipe(Stream.take(2)),
+      );
+      assert.deepStrictEqual(firstChunk, [
+        { id: "todo-0", name: "Todo 0" },
+        { id: "todo-1", name: "Todo 1" },
+      ]);
     }),
   );
 
