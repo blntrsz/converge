@@ -12,7 +12,7 @@ import {
   EventRouter,
   IndexedDbReplicaSyncEngine,
   PostgresPrimarySyncEngine,
-  PrimaryProjectionBootstrap,
+  PrimaryProjectionRegistry,
   PrimarySyncEngine,
   ReplicaApplyContext,
   ReplicaSyncEngine,
@@ -93,13 +93,11 @@ const ReplicaEventRouterLayer = EventRouter.layer({
   handlers: [replicaTodoCreatedHandler],
 });
 
-const PrimaryProjectionBootstrapLayer = PrimaryProjectionBootstrap.layer({
-  encoders: [],
-});
+const PrimaryProjectionRegistryLayer = PrimaryProjectionRegistry.layer([]);
 
 const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provideMerge(PrimaryEventRouterLayer),
-  Layer.provideMerge(PrimaryProjectionBootstrapLayer),
+  Layer.provideMerge(PrimaryProjectionRegistryLayer),
   Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 

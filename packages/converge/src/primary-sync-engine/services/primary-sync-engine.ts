@@ -69,6 +69,7 @@ export interface StoredEvent {
  */
 export interface ProjectionBootstrapSnapshot {
   readonly projectionKey: string;
+  readonly eventId: string;
   readonly snapshot: unknown;
   readonly anchorEvent: EventInstance.EventInstance;
 }

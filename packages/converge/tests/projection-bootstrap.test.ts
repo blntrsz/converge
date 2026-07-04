@@ -8,11 +8,19 @@ import {
   EventInstance,
   EventRouter,
   HttpPrimarySyncEngine,
+  PostgresPrimaryProjection,
   PostgresPrimarySyncEngine,
-  PrimaryProjectionBootstrap,
+  PrimaryProjectionRegistry,
   PrimarySyncEngine,
 } from "../src/index.ts";
 import { PgliteSqlClient } from "../src/pglite-client.ts";
+
+const TodoSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+});
+
+type Todo = Schema.Schema.Type<typeof TodoSchema>;
 
 const todoCreated = Event.make("todo.created.v1", {
   id: Schema.String,
@@ -62,19 +70,13 @@ const todoUpdatedHandler = EventHandler.make(
   }),
 );
 
-const todosEncoder = {
-  projectionKey: "todos",
-  encode: Effect.fn(function* (anchor) {
-    const sql = yield* SqlClient.SqlClient;
-
-    return yield* sql<{ id: string; name: string }>`
-      SELECT DISTINCT ON (id) id, name
-      FROM todo_versions
-      WHERE since <= ${anchor.sequence}
-      ORDER BY id, since DESC
-    `.pipe(Effect.orDie);
-  }),
-} satisfies PrimaryProjectionBootstrap.PrimaryProjectionBootstrapEncoder<SqlClient.SqlClient>;
+const todosPrimaryProjectionConfig = {
+  key: "todos",
+  table: "todo_versions",
+  entityIdColumn: "id",
+  entitySchema: TodoSchema,
+  columns: ["name"],
+} satisfies PostgresPrimaryProjection.PostgresPrimaryProjectionOptions<Todo>;
 
 const migrations = Migrator.fromRecord({
   "2_create_todo_versions": Effect.gen(function* () {
@@ -105,66 +107,131 @@ const EventRouterLayer = EventRouter.layer({
   handlers: [todoCreatedHandler, todoUpdatedHandler],
 });
 
-const PrimaryProjectionBootstrapLayer = PrimaryProjectionBootstrap.layer({
-  encoders: [todosEncoder],
-});
+const PrimaryProjectionRegistryLayer = PostgresPrimaryProjection.registryLayer([
+  todosPrimaryProjectionConfig,
+]).pipe(Layer.provideMerge(PgSqlClientWithAllMigrations));
 
 const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provideMerge(EventRouterLayer),
-  Layer.provideMerge(PrimaryProjectionBootstrapLayer),
+  Layer.provideMerge(PrimaryProjectionRegistryLayer),
   Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 
 const PrimarySyncEngineOnlyLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provideMerge(EventRouterLayer),
-  Layer.provideMerge(PrimaryProjectionBootstrapLayer),
+  Layer.provideMerge(PrimaryProjectionRegistryLayer),
   Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 
+const resetPrimaryData = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`TRUNCATE todo_versions`;
+  yield* sql`TRUNCATE event_history RESTART IDENTITY`;
+});
+
 layer(PrimarySyncEngineLayer)((it) => {
-  it.effect("bootstraps versioned todos at anchored events", () =>
+  it.effect("lists versioned todos at a sync position eventId", () =>
     Effect.gen(function* () {
+      yield* resetPrimaryData;
+      const registry = yield* PrimaryProjectionRegistry.PrimaryProjectionRegistry;
       const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
 
-      const event1 = yield* EventInstance.make(todoCreated, {
-        id: "1",
-        name: "A",
+      const event1 = yield* EventInstance.make(todoCreated, { id: "1", name: "A" });
+      const event2 = yield* EventInstance.make(todoUpdated, { id: "1", name: "B" });
+      const event3 = yield* EventInstance.make(todoCreated, { id: "2", name: "C" });
+
+      yield* engine.push(event1, event2, event3);
+
+      const projectionOption = registry.find("todos");
+      if (Option.isNone(projectionOption)) {
+        assert.fail("expected todos primary projection to be registered");
+      }
+      const projection = projectionOption.value;
+
+      const page1 = yield* projection.list(event1.eventId);
+      assert.deepStrictEqual(page1.data, [{ id: "1", name: "A" }]);
+      assert.isFalse(page1.hasNext);
+
+      const page2 = yield* projection.list(event2.eventId);
+      assert.deepStrictEqual(page2.data, [{ id: "1", name: "B" }]);
+
+      const page3 = yield* projection.list(event3.eventId);
+      assert.deepStrictEqual(page3.data, [
+        { id: "1", name: "B" },
+        { id: "2", name: "C" },
+      ]);
+    }),
+  );
+
+  it.effect("paginates entities ordered by entity id", () =>
+    Effect.gen(function* () {
+      yield* resetPrimaryData;
+      const registry = yield* PrimaryProjectionRegistry.PrimaryProjectionRegistry;
+      const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+
+      const events = [];
+      for (let index = 0; index < 5; index++) {
+        events.push(
+          yield* EventInstance.make(todoCreated, {
+            id: `todo-${index}`,
+            name: `Todo ${index}`,
+          }),
+        );
+      }
+      yield* engine.push(...events);
+
+      const projectionOption = registry.find("todos");
+      if (Option.isNone(projectionOption)) {
+        assert.fail("expected todos primary projection to be registered");
+      }
+      const projection = projectionOption.value;
+
+      const anchorEventId = events[events.length - 1]!.eventId;
+      const firstPage = yield* projection.list(anchorEventId, { limit: 2 });
+      assert.strictEqual(firstPage.data.length, 2);
+      assert.isTrue(firstPage.hasNext);
+      assert.strictEqual(firstPage.cursor, "todo-1");
+
+      const secondPage = yield* projection.list(anchorEventId, {
+        limit: 2,
+        cursor: firstPage.cursor,
       });
-      const event2 = yield* EventInstance.make(todoUpdated, {
-        id: "1",
-        name: "B",
+      assert.strictEqual(secondPage.data.length, 2);
+      assert.isTrue(secondPage.hasNext);
+
+      const thirdPage = yield* projection.list(anchorEventId, {
+        limit: 2,
+        cursor: secondPage.cursor,
       });
-      const event3 = yield* EventInstance.make(todoCreated, {
-        id: "2",
-        name: "C",
-      });
+      assert.strictEqual(thirdPage.data.length, 1);
+      assert.isFalse(thirdPage.hasNext);
+    }),
+  );
 
-      const results = yield* engine.push(event1, event2, event3);
-      assert.strictEqual(results.length, 3);
-      for (const result of results) {
-        if (!Result.isSuccess(result)) {
-          assert.fail("expected all events to be accepted");
-        }
+  it.effect("bootstraps via eventId after resolving latest event", () =>
+    Effect.gen(function* () {
+      yield* resetPrimaryData;
+      const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+
+      const event1 = yield* EventInstance.make(todoCreated, { id: "1", name: "A" });
+      const event2 = yield* EventInstance.make(todoUpdated, { id: "1", name: "B" });
+      const event3 = yield* EventInstance.make(todoCreated, { id: "2", name: "C" });
+
+      yield* engine.push(event1, event2, event3);
+
+      const latest = yield* engine.getLatestEvent();
+      if (Option.isNone(latest)) {
+        assert.fail("expected latest event after push");
       }
 
-      const bootstrap1 = yield* engine.bootstrap("todos", event1.eventId);
-      if (Option.isNone(bootstrap1)) {
-        assert.fail("expected bootstrap at event1 to return a snapshot");
+      const bootstrap = yield* engine.bootstrap("todos", latest.value.eventId);
+      if (Option.isNone(bootstrap)) {
+        assert.fail("expected bootstrap at latest eventId");
       }
-      assert.deepStrictEqual(bootstrap1.value.snapshot, [{ id: "1", name: "A" }]);
-      assert.strictEqual(bootstrap1.value.anchorEvent.eventId, event1.eventId);
 
-      const bootstrap2 = yield* engine.bootstrap("todos", event2.eventId);
-      if (Option.isNone(bootstrap2)) {
-        assert.fail("expected bootstrap at event2 to return a snapshot");
-      }
-      assert.deepStrictEqual(bootstrap2.value.snapshot, [{ id: "1", name: "B" }]);
-
-      const bootstrap3 = yield* engine.bootstrap("todos", event3.eventId);
-      if (Option.isNone(bootstrap3)) {
-        assert.fail("expected bootstrap at event3 to return a snapshot");
-      }
-      assert.deepStrictEqual(bootstrap3.value.snapshot, [
+      assert.strictEqual(bootstrap.value.eventId, latest.value.eventId);
+      assert.strictEqual(bootstrap.value.anchorEvent.eventId, latest.value.eventId);
+      assert.deepStrictEqual(bootstrap.value.snapshot, [
         { id: "1", name: "B" },
         { id: "2", name: "C" },
       ]);
@@ -173,6 +240,7 @@ layer(PrimarySyncEngineLayer)((it) => {
 
   it.effect("returns none for unknown eventId", () =>
     Effect.gen(function* () {
+      yield* resetPrimaryData;
       const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
 
       const bootstrap = yield* engine.bootstrap("todos", "unknown-event-id");
@@ -183,6 +251,7 @@ layer(PrimarySyncEngineLayer)((it) => {
 
   it.effect("returns none for unregistered projectionKey", () =>
     Effect.gen(function* () {
+      yield* resetPrimaryData;
       const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
 
       const event = yield* EventInstance.make(todoCreated, {
@@ -209,29 +278,30 @@ layer(PrimarySyncEngineLayer)((it) => {
       )) as typeof globalThis.fetch;
 
     return Effect.gen(function* () {
+      yield* resetPrimaryData;
       const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
 
-      const event1 = yield* EventInstance.make(todoCreated, {
-        id: "1",
-        name: "A",
-      });
-      const event2 = yield* EventInstance.make(todoUpdated, {
-        id: "1",
-        name: "B",
-      });
-      const event3 = yield* EventInstance.make(todoCreated, {
-        id: "2",
-        name: "C",
-      });
+      const event1 = yield* EventInstance.make(todoCreated, { id: "1", name: "A" });
+      const event2 = yield* EventInstance.make(todoUpdated, { id: "1", name: "B" });
+      const event3 = yield* EventInstance.make(todoCreated, { id: "2", name: "C" });
 
       yield* engine.push(event1, event2, event3);
 
-      const bootstrap = yield* engine.bootstrap("todos", event1.eventId);
-      if (Option.isNone(bootstrap)) {
-        assert.fail("expected HTTP bootstrap at event1 to return a snapshot");
+      const latest = yield* engine.getLatestEvent();
+      if (Option.isNone(latest)) {
+        assert.fail("expected latest event after HTTP push");
       }
-      assert.deepStrictEqual(bootstrap.value.snapshot, [{ id: "1", name: "A" }]);
-      assert.strictEqual(bootstrap.value.anchorEvent.eventId, event1.eventId);
+
+      const bootstrap = yield* engine.bootstrap("todos", latest.value.eventId);
+      if (Option.isNone(bootstrap)) {
+        assert.fail("expected HTTP bootstrap at latest eventId");
+      }
+
+      assert.strictEqual(bootstrap.value.eventId, latest.value.eventId);
+      assert.deepStrictEqual(bootstrap.value.snapshot, [
+        { id: "1", name: "B" },
+        { id: "2", name: "C" },
+      ]);
 
       const missing = yield* engine.bootstrap("todos", "http-unknown-event-id");
       assert.isTrue(Option.isNone(missing));

@@ -3,7 +3,7 @@ import { SqlClient, SqlSchema } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { EventInstance } from "../../event/event-instance.ts";
 import { EventRouterService } from "../../event/event-router.ts";
-import { PrimaryProjectionBootstrapService } from "../../projection/services/primary-projection-bootstrap.ts";
+import { PrimaryProjectionRegistry } from "../../projection/services/primary-projection-registry.ts";
 import {
   PrimarySyncEngine,
   type IPrimarySyncEngine,
@@ -72,13 +72,13 @@ export const migrationsLayer = Layer.effectDiscard(Migrator.make({})({ loader: m
 export const layer: Layer.Layer<
   PrimarySyncEngine,
   never,
-  SqlClient.SqlClient | EventRouterService | PrimaryProjectionBootstrapService
+  SqlClient.SqlClient | EventRouterService | PrimaryProjectionRegistry
 > = Layer.effect(
   PrimarySyncEngine,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const eventRouter = yield* EventRouterService;
-    const projectionBootstrap = yield* PrimaryProjectionBootstrapService;
+    const projectionRegistry = yield* PrimaryProjectionRegistry;
 
     const pullEvents = SqlSchema.findAll({
       Request: Schema.Struct({
@@ -298,18 +298,16 @@ export const layer: Layer.Layer<
           return Option.none();
         }
 
-        const encoder = projectionBootstrap.find(projectionKey);
-        if (!encoder) {
+        const snapshotOption = yield* projectionRegistry.bootstrap(projectionKey, eventId);
+        if (Option.isNone(snapshotOption)) {
           return Option.none();
         }
 
-        const { event, sequence } = storedEventOption.value;
-        const snapshot = yield* encoder.encode({ sequence });
-
         return Option.some({
           projectionKey,
-          snapshot,
-          anchorEvent: event,
+          eventId,
+          snapshot: snapshotOption.value,
+          anchorEvent: storedEventOption.value.event,
         } satisfies ProjectionBootstrapSnapshot);
       },
     );

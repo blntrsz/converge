@@ -120,6 +120,7 @@ export type WireEventResponse = typeof WireEventResponse.Type;
  */
 export const WireBootstrapResponse = Schema.Struct({
   projectionKey: Schema.String,
+  eventId: Schema.String,
   snapshot: Schema.Unknown,
   anchorEvent: WireEvent,
 });
@@ -268,6 +269,7 @@ export const eventResponseToWire = (
  */
 export const bootstrapFromWire = (response: WireBootstrapResponse): ProjectionBootstrapSnapshot => ({
   projectionKey: response.projectionKey,
+  eventId: response.eventId,
   snapshot: response.snapshot,
   anchorEvent: eventFromWire(response.anchorEvent),
 });
@@ -278,6 +280,7 @@ export const bootstrapFromWire = (response: WireBootstrapResponse): ProjectionBo
  */
 export const bootstrapToWire = (snapshot: ProjectionBootstrapSnapshot): WireBootstrapResponse => ({
   projectionKey: snapshot.projectionKey,
+  eventId: snapshot.eventId,
   snapshot: snapshot.snapshot,
   anchorEvent: eventToWire(snapshot.anchorEvent),
 });
