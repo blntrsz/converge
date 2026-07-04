@@ -3,7 +3,7 @@ import { SqlClient, SqlSchema } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { EventInstance } from "../../event/event-instance.ts";
 import { EventRouterService } from "../../event/event-router.ts";
-import { PrimaryProjectionBootstrapService } from "../../projection-bootstrap/services/primary-projection-bootstrap.ts";
+import { PrimaryProjectionBootstrapService } from "../../projection/services/primary-projection-bootstrap.ts";
 import {
   PrimarySyncEngine,
   type IPrimarySyncEngine,
