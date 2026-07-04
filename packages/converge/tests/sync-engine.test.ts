@@ -268,7 +268,8 @@ layer(PrimarySyncEngineLayer)((it) => {
       if (Option.isNone(found)) {
         assert.fail("expected getEvent to return the pushed event");
       }
-      assert.strictEqual(found.value.eventId, event.eventId);
+      assert.strictEqual(found.value.event.eventId, event.eventId);
+      assert.ok(found.value.sequence > 0);
 
       const missing = yield* engine.getEvent("unknown-event-id");
       assert.isTrue(Option.isNone(missing));
@@ -367,7 +368,8 @@ layer(PrimarySyncEngineLayer)((it) => {
       if (Option.isNone(found)) {
         assert.fail("expected HTTP getEvent to return the pushed event");
       }
-      assert.strictEqual(found.value.eventId, secondEvent.eventId);
+      assert.strictEqual(found.value.event.eventId, secondEvent.eventId);
+      assert.ok(found.value.sequence > 0);
 
       const missing = yield* engine.getEvent("http-unknown-event-id");
       assert.isTrue(Option.isNone(missing));

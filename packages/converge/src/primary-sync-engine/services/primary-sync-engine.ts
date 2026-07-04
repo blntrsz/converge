@@ -40,7 +40,7 @@ export interface IPrimarySyncEngine {
    * @since 0.0.0
    * @category service-method-interface
    */
-  getEvent(eventId: string): Effect.Effect<Option.Option<EventInstance.EventInstance>>;
+  getEvent(eventId: string): Effect.Effect<Option.Option<StoredEvent>>;
 
   /**
    * @since 0.0.0
@@ -50,6 +50,17 @@ export interface IPrimarySyncEngine {
     projectionKey: string,
     eventId: string,
   ): Effect.Effect<Option.Option<ProjectionBootstrapSnapshot>>;
+}
+
+/**
+ * An accepted EventInstance with its monotonic event history id.
+ *
+ * @since 0.0.0
+ * @category type
+ */
+export interface StoredEvent {
+  readonly event: EventInstance.EventInstance;
+  readonly sequence: number;
 }
 
 /**

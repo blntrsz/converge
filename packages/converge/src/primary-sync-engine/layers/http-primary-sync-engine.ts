@@ -9,6 +9,7 @@ import {
   PrimarySyncEngine,
   type IPrimarySyncEngine,
   type ProjectionBootstrapSnapshot,
+  type StoredEvent,
 } from "../services/primary-sync-engine.ts";
 
 /**
@@ -104,6 +105,7 @@ export type WirePushResponse = typeof WirePushResponse.Type;
  */
 export const WireEventResponse = Schema.Struct({
   event: Schema.NullOr(WireEvent),
+  sequence: Schema.optional(Schema.Number),
 });
 
 /**
@@ -210,7 +212,7 @@ export const pushResultToWire = (
  * @since 0.0.0
  * @category encoding
  */
-export const eventResponseFromWire = (
+export const latestEventResponseFromWire = (
   response: WireEventResponse,
 ): Option.Option<EventInstance> =>
   response.event === null ? Option.none() : Option.some(eventFromWire(response.event));
@@ -219,14 +221,46 @@ export const eventResponseFromWire = (
  * @since 0.0.0
  * @category encoding
  */
-export const eventResponseToWire = (
+export const eventResponseFromWire = (
+  response: WireEventResponse,
+): Option.Option<StoredEvent> => {
+  if (response.event === null) {
+    return Option.none();
+  }
+
+  if (response.sequence === undefined) {
+    return Option.none();
+  }
+
+  return Option.some({
+    event: eventFromWire(response.event),
+    sequence: response.sequence,
+  });
+};
+
+/**
+ * @since 0.0.0
+ * @category encoding
+ */
+export const latestEventResponseToWire = (
   event: Option.Option<EventInstance>,
-): WireEventResponse => ({
-  event: Option.match(event, {
-    onNone: () => null,
-    onSome: eventToWire,
-  }),
-});
+): WireEventResponse =>
+  Option.match(event, {
+    onNone: () => ({ event: null }),
+    onSome: (event) => ({ event: eventToWire(event) }),
+  });
+
+/**
+ * @since 0.0.0
+ * @category encoding
+ */
+export const eventResponseToWire = (
+  storedEvent: Option.Option<StoredEvent>,
+): WireEventResponse =>
+  Option.match(storedEvent, {
+    onNone: () => ({ event: null }),
+    onSome: ({ event, sequence }) => ({ event: eventToWire(event), sequence }),
+  });
 
 /**
  * @since 0.0.0
@@ -345,7 +379,7 @@ export const routesLayer = (options?: RoutesLayerOptions) =>
           Effect.gen(function* () {
             const event = yield* getLatestEventPrimary();
 
-            return json(eventResponseToWire(event));
+            return json(latestEventResponseToWire(event));
           }),
       ),
 
@@ -515,7 +549,7 @@ export const layer = (options: LayerOptions): Layer.Layer<PrimarySyncEngine> => 
       catch: (error) => error,
     }).pipe(
       Effect.flatMap((body) => decodeEventResponse(body)),
-      Effect.map(eventResponseFromWire),
+      Effect.map(latestEventResponseFromWire),
       Effect.orDie,
     );
 

@@ -8,6 +8,7 @@ import {
   PrimarySyncEngine,
   type IPrimarySyncEngine,
   type ProjectionBootstrapSnapshot,
+  type StoredEvent,
 } from "../services/primary-sync-engine.ts";
 
 const PullPageSize = 100;
@@ -125,13 +126,21 @@ export const layer: Layer.Layer<
       `,
     });
 
+    const GetEventRow = Schema.Struct({
+      sequence: Schema.Number,
+      eventId: Schema.String,
+      eventType: Schema.String,
+      eventDetails: Schema.Unknown,
+    });
+
     const getEventQuery = SqlSchema.findAll({
       Request: Schema.Struct({
         eventId: Schema.String,
       }),
-      Result: EventInstance,
+      Result: GetEventRow,
       execute: (input) => sql`
         SELECT
+          id AS sequence,
           event_id,
           event_type,
           event_details
@@ -263,23 +272,20 @@ export const layer: Layer.Layer<
       function* (eventId) {
         const rows = yield* getEventQuery({ eventId }).pipe(Effect.orDie);
 
-        return Array.head(rows);
+        return Array.head(rows).pipe(
+          Option.map(
+            (row): StoredEvent => ({
+              sequence: row.sequence,
+              event: new EventInstance({
+                eventId: row.eventId,
+                eventType: row.eventType,
+                eventDetails: row.eventDetails,
+              }),
+            }),
+          ),
+        );
       },
     );
-
-    const sequenceAt = (eventId: string) =>
-      sql<{ id: string }>`
-        SELECT id::text AS id
-        FROM event_history
-        WHERE event_id = ${eventId}
-        LIMIT 1
-      `.pipe(
-        Effect.map((rows) => {
-          const row = rows[0];
-          return row === undefined ? Option.none<number>() : Option.some(Number(row.id));
-        }),
-        Effect.orDie,
-      );
 
     /**
      * @since 0.0.0
@@ -287,13 +293,8 @@ export const layer: Layer.Layer<
      */
     const bootstrap: IPrimarySyncEngine["bootstrap"] = Effect.fn("PrimarySyncEngine.bootstrap")(
       function* (projectionKey, eventId) {
-        const anchorEventOption = yield* getEvent(eventId);
-        if (Option.isNone(anchorEventOption)) {
-          return Option.none();
-        }
-
-        const sequenceOption = yield* sequenceAt(eventId);
-        if (Option.isNone(sequenceOption)) {
+        const storedEventOption = yield* getEvent(eventId);
+        if (Option.isNone(storedEventOption)) {
           return Option.none();
         }
 
@@ -302,12 +303,13 @@ export const layer: Layer.Layer<
           return Option.none();
         }
 
-        const snapshot = yield* encoder.encode({ sequence: sequenceOption.value });
+        const { event, sequence } = storedEventOption.value;
+        const snapshot = yield* encoder.encode({ sequence });
 
         return Option.some({
           projectionKey,
           snapshot,
-          anchorEvent: anchorEventOption.value,
+          anchorEvent: event,
         } satisfies ProjectionBootstrapSnapshot);
       },
     );
