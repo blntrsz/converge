@@ -28,16 +28,16 @@ const todoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
     const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql<{ id: string }>`
-      SELECT id::text AS id FROM event_history WHERE event_id = ${event.eventId}
-    `;
-    const since = rows[0]!.id;
+    const sequence = yield* PostgresPrimarySyncEngine.versionSequenceAt(event.eventId);
+    if (Option.isNone(sequence)) {
+      return;
+    }
 
     yield* sql`
       INSERT INTO todo_versions ${sql.insert({
         id: event.eventDetails.id,
         name: event.eventDetails.name,
-        since,
+        since: sequence.value,
       })}
     `;
   }),
@@ -47,16 +47,16 @@ const todoUpdatedHandler = EventHandler.make(
   todoUpdated,
   Effect.fn(function* (event) {
     const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql<{ id: string }>`
-      SELECT id::text AS id FROM event_history WHERE event_id = ${event.eventId}
-    `;
-    const since = rows[0]!.id;
+    const sequence = yield* PostgresPrimarySyncEngine.versionSequenceAt(event.eventId);
+    if (Option.isNone(sequence)) {
+      return;
+    }
 
     yield* sql`
       INSERT INTO todo_versions ${sql.insert({
         id: event.eventDetails.id,
         name: event.eventDetails.name,
-        since,
+        since: sequence.value,
       })}
     `;
   }),
@@ -70,9 +70,7 @@ const todosEncoder = {
     return yield* sql<{ id: string; name: string }>`
       SELECT DISTINCT ON (id) id, name
       FROM todo_versions
-      WHERE since <= (
-        SELECT id FROM event_history WHERE event_id = ${anchor.eventId}
-      )
+      WHERE since <= ${anchor.sequence}
       ORDER BY id, since DESC
     `.pipe(Effect.orDie);
   }),
@@ -118,9 +116,9 @@ const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
 );
 
 const PrimarySyncEngineOnlyLayer = PostgresPrimarySyncEngine.layer.pipe(
-  Layer.provide(EventRouterLayer),
-  Layer.provide(PrimaryProjectionBootstrapLayer),
-  Layer.provide(PgSqlClientWithAllMigrations),
+  Layer.provideMerge(EventRouterLayer),
+  Layer.provideMerge(PrimaryProjectionBootstrapLayer),
+  Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 
 layer(PrimarySyncEngineLayer)((it) => {

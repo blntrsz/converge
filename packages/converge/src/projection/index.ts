@@ -8,4 +8,5 @@ export type {
   MutationFn,
   ProjectionStorage,
 } from "./services/projection";
+export type { BootstrapAnchor } from "./services/primary-projection-bootstrap";
 export { ProjectionStorageError } from "./services/projection";

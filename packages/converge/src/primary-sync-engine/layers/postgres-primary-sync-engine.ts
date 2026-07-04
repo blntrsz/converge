@@ -12,6 +12,28 @@ import {
 
 const PullPageSize = 100;
 
+/**
+ * Resolves a wire sync position (`eventId`) to the monotonic event history id.
+ * Use eventId only for lookup; use the returned sequence for ordering and `since`.
+ *
+ * @since 0.0.0
+ * @category helpers
+ */
+export const versionSequenceAt = Effect.fn("PostgresPrimarySyncEngine.versionSequenceAt")(
+  function* (eventId: string) {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ id: string }>`
+      SELECT id::text AS id
+      FROM event_history
+      WHERE event_id = ${eventId}
+      LIMIT 1
+    `.pipe(Effect.orDie);
+
+    const row = rows[0];
+    return row === undefined ? Option.none<number>() : Option.some(Number(row.id));
+  },
+);
+
 class EventRejected {
   readonly _tag = "EventRejected";
 }
@@ -108,25 +130,6 @@ export const layer: Layer.Layer<
         eventId: Schema.String,
       }),
       Result: EventInstance,
-      execute: (input) => sql`
-        SELECT
-          event_id,
-          event_type,
-          event_details
-        FROM event_history
-        WHERE event_id = ${input.eventId}
-      `,
-    });
-
-    const getBootstrapAnchorQuery = SqlSchema.findAll({
-      Request: Schema.Struct({
-        eventId: Schema.String,
-      }),
-      Result: Schema.Struct({
-        eventId: Schema.String,
-        eventType: Schema.String,
-        eventDetails: Schema.Unknown,
-      }),
       execute: (input) => sql`
         SELECT
           event_id,
@@ -264,15 +267,33 @@ export const layer: Layer.Layer<
       },
     );
 
+    const sequenceAt = (eventId: string) =>
+      sql<{ id: string }>`
+        SELECT id::text AS id
+        FROM event_history
+        WHERE event_id = ${eventId}
+        LIMIT 1
+      `.pipe(
+        Effect.map((rows) => {
+          const row = rows[0];
+          return row === undefined ? Option.none<number>() : Option.some(Number(row.id));
+        }),
+        Effect.orDie,
+      );
+
     /**
      * @since 0.0.0
      * @category service-method
      */
     const bootstrap: IPrimarySyncEngine["bootstrap"] = Effect.fn("PrimarySyncEngine.bootstrap")(
       function* (projectionKey, eventId) {
-        const rows = yield* getBootstrapAnchorQuery({ eventId }).pipe(Effect.orDie);
-        const anchorRow = Array.head(rows);
-        if (Option.isNone(anchorRow)) {
+        const anchorEventOption = yield* getEvent(eventId);
+        if (Option.isNone(anchorEventOption)) {
+          return Option.none();
+        }
+
+        const sequenceOption = yield* sequenceAt(eventId);
+        if (Option.isNone(sequenceOption)) {
           return Option.none();
         }
 
@@ -281,19 +302,12 @@ export const layer: Layer.Layer<
           return Option.none();
         }
 
-        const snapshot = yield* encoder.encode({
-          eventId: anchorRow.value.eventId,
-        });
-        const anchorEvent = new EventInstance({
-          eventId: anchorRow.value.eventId,
-          eventType: anchorRow.value.eventType,
-          eventDetails: anchorRow.value.eventDetails,
-        });
+        const snapshot = yield* encoder.encode({ sequence: sequenceOption.value });
 
         return Option.some({
           projectionKey,
           snapshot,
-          anchorEvent,
+          anchorEvent: anchorEventOption.value,
         } satisfies ProjectionBootstrapSnapshot);
       },
     );

@@ -1,11 +1,16 @@
 import { Context, Effect, Layer, type Effect as EffectType } from "effect";
 
 /**
+ * Anchor for versioned primary storage reads during bootstrap.
+ *
+ * Resolve sync position `eventId` to `sequence` at the bootstrap boundary.
+ * Encoders use `sequence` (event_history.id) for `since` filters — not eventId.
+ *
  * @since 0.0.0
  * @category type
  */
 export interface BootstrapAnchor {
-  readonly eventId: string;
+  readonly sequence: number;
 }
 
 /**

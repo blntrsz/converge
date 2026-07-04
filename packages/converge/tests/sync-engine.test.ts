@@ -115,9 +115,9 @@ const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
 );
 
 const PrimarySyncEngineOnlyLayer = PostgresPrimarySyncEngine.layer.pipe(
-  Layer.provide(EventRouterLayer),
-  Layer.provide(PrimaryProjectionBootstrapLayer),
-  Layer.provide(PgSqlClientWithAllMigrations),
+  Layer.provideMerge(EventRouterLayer),
+  Layer.provideMerge(PrimaryProjectionBootstrapLayer),
+  Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 
 layer(PrimarySyncEngineLayer)((it) => {
