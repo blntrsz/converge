@@ -381,3 +381,15 @@ export function routerLayer<
     }),
   );
 }
+
+/**
+ * @since 0.0.0
+ * @category layer
+ */
+export const emptyLayer: Layer.Layer<ProjectionRouter> = Layer.succeed(
+  ProjectionRouter,
+  ProjectionRouter.of({
+    all: [],
+    find: () => undefined,
+  }),
+);

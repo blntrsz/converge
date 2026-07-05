@@ -1,7 +1,10 @@
 import { IndexedDb, IndexedDbDatabase, IndexedDbTable, IndexedDbVersion } from "@effect/platform-browser";
-import { Effect, Layer, Option, Queue, Ref, Result, Semaphore, Schema } from "effect";
+import { Effect, Layer, Option, Queue, Ref, Result, Schema, Semaphore, Stream } from "effect";
+import { EventId } from "../../event/event-id.ts";
 import { EventInstance } from "../../event/event-instance.ts";
 import { EventRouterService } from "../../event/event-router.ts";
+import { ProjectionRouter } from "../../projection/services/projection.ts";
+import { PrimaryProjectionRouter } from "../../primary-sync-engine/services/primary-projection.ts";
 import { PrimarySyncEngine } from "../../primary-sync-engine/services/primary-sync-engine.ts";
 import { ReplicaApplyContext, type ApplyPhase } from "../services/apply-context.ts";
 import {
@@ -142,6 +145,8 @@ export const layer: Layer.Layer<
   ReplicaSyncEngine,
   never,
   | PrimarySyncEngine
+  | PrimaryProjectionRouter
+  | ProjectionRouter
   | EventRouterService
   | ReplicaApplyContext
   | IndexedDbDatabase.IndexedDbDatabase
@@ -149,6 +154,8 @@ export const layer: Layer.Layer<
   ReplicaSyncEngine,
   Effect.gen(function* () {
     const primary = yield* PrimarySyncEngine;
+    const primaryProjections = yield* PrimaryProjectionRouter;
+    const projections = yield* ProjectionRouter;
     const eventRouter = yield* EventRouterService;
     const applyContext = yield* ReplicaApplyContext;
     const api = yield* ReplicaSyncEngineDatabase.getQueryBuilder;
@@ -331,7 +338,45 @@ export const layer: Layer.Layer<
       }
     });
 
+    const seedAcceptedEvent = (event: EventInstance) =>
+      acceptLock.withPermits(1)(
+        Effect.gen(function* () {
+          const existing = yield* findAcceptedEvent(event.eventId);
+          if (Option.isSome(existing)) return;
+
+          yield* appendAcceptedEvent(event);
+        }),
+      );
+
+    const bootstrapReplicaProjections = Effect.gen(function* () {
+      if (projections.all.length === 0) return;
+
+      const cursorOption = yield* lastEventId();
+      if (Option.isSome(cursorOption)) return;
+
+      const latestEvent = yield* primary.getLatestEvent();
+      if (Option.isNone(latestEvent)) return;
+
+      const eventId = Schema.decodeUnknownSync(EventId)(latestEvent.value.eventId);
+      for (const projection of projections.all) {
+        const primaryProjection = primaryProjections.find(projection.key);
+        if (!primaryProjection) {
+          return yield* Effect.die(
+            new Error(`Missing primary projection for ${projection.key}`),
+          );
+        }
+
+        const rows = primaryProjection.bootstrap({ eventId }).pipe(
+          Stream.mapError((error) => error as unknown),
+        );
+        yield* projection.bootstrap(rows);
+      }
+
+      yield* seedAcceptedEvent(latestEvent.value);
+    });
+
     const pullRemoteEvents = Effect.gen(function* () {
+      yield* bootstrapReplicaProjections;
       let cursorOption = yield* lastEventId();
       while (true) {
         const page = yield* primary.pull(Option.getOrUndefined(cursorOption));

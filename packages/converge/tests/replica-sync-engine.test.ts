@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { TestClock } from "effect/testing";
@@ -11,8 +11,11 @@ import {
   EventInstance,
   EventRouter,
   IndexedDbReplicaSyncEngine,
+  MemoryProjection,
   PostgresPrimarySyncEngine,
+  PrimaryProjection,
   PrimarySyncEngine,
+  Projection,
   ReplicaApplyContext,
   ReplicaSyncEngine,
 } from "../src/index.ts";
@@ -22,6 +25,18 @@ const todoCreated = Event.make("todo.created.v1", {
   id: Schema.String,
   name: Schema.String,
 });
+
+const TodoBootstrapRow = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+});
+
+type TodoBootstrapRow = typeof TodoBootstrapRow.Type;
+
+class BootstrapTodoProjection extends Context.Service<
+  BootstrapTodoProjection,
+  Projection.IReactiveProjection<ReadonlyArray<TodoBootstrapRow>, never, TodoBootstrapRow>
+>()("BootstrapTodoProjection") {}
 
 let replicaHandlerRuns = 0;
 let optimisticHandlerRuns = 0;
@@ -97,6 +112,38 @@ const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 
+const BootstrapPrimaryProjectionLayer = PrimaryProjection.layer({
+  projections: [
+    {
+      key: "todos",
+      rowSchema: TodoBootstrapRow,
+      bootstrap: ({ eventId }) =>
+        Stream.make({
+          id: "bootstrapped-head",
+          name: eventId,
+        }),
+    },
+  ],
+});
+
+const BootstrapTodoProjectionLayer = MemoryProjection.memoryLayer(BootstrapTodoProjection, {
+  initialValue: [] as ReadonlyArray<TodoBootstrapRow>,
+  bootstrap: (rows: Stream.Stream<TodoBootstrapRow, unknown>) =>
+    rows.pipe(
+      Stream.runCollect,
+      Effect.map((snapshot) => Array.from(snapshot)),
+    ),
+});
+
+const BootstrapProjectionRouterLayer = Projection.routerLayer({
+  projections: [
+    {
+      key: "todos",
+      projection: BootstrapTodoProjection,
+    },
+  ],
+}).pipe(Layer.provideMerge(BootstrapTodoProjectionLayer));
+
 const FakeIndexedDbLayer = Layer.succeed(
   IndexedDb.IndexedDb,
   IndexedDb.make({ indexedDB, IDBKeyRange }),
@@ -111,6 +158,21 @@ const ReplicaSyncEngineLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provideMerge(ReplicaDatabaseLayer),
   Layer.provideMerge(ReplicaApplyContext.layer),
   Layer.provideMerge(PrimarySyncEngineLayer),
+  Layer.provideMerge(PrimaryProjection.emptyLayer),
+  Layer.provideMerge(Projection.emptyLayer),
+);
+
+const BootstrapReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
+  "test-replica-bootstrap",
+).pipe(Layer.provide(FakeIndexedDbLayer));
+
+const ReplicaSyncEngineWithBootstrapLayer = IndexedDbReplicaSyncEngine.layer.pipe(
+  Layer.provide(ReplicaEventRouterLayer),
+  Layer.provideMerge(BootstrapReplicaDatabaseLayer),
+  Layer.provideMerge(ReplicaApplyContext.layer),
+  Layer.provideMerge(PrimarySyncEngineLayer),
+  Layer.provideMerge(BootstrapPrimaryProjectionLayer),
+  Layer.provideMerge(BootstrapProjectionRouterLayer),
 );
 
 const resetCounters = () => {
@@ -136,6 +198,18 @@ const waitForReplicaHandler = (target: number): Effect.Effect<void> =>
     for (let i = 0; i < 200; i++) {
       yield* Effect.sleep("50 millis");
       if (replicaHandlerRuns >= target) return;
+    }
+  });
+
+const waitForBootstrappedTodos = (
+  target: number,
+): Effect.Effect<void, never, BootstrapTodoProjection> =>
+  Effect.gen(function* () {
+    const projection = yield* BootstrapTodoProjection;
+    for (let i = 0; i < 200; i++) {
+      yield* Effect.sleep("50 millis");
+      const todos = yield* projection.query((todos) => todos);
+      if (todos.length >= target) return;
     }
   });
 
@@ -382,5 +456,54 @@ layer(ReplicaSyncEngineLayer)((it) => {
         }),
       ),
     60000,
+  );
+});
+
+layer(ReplicaSyncEngineWithBootstrapLayer)((it) => {
+  it.effect(
+    "first poke bootstraps registered projections at the primary head",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+          const projection = yield* BootstrapTodoProjection;
+
+          const firstEvent = yield* EventInstance.make(todoCreated, {
+            id: "bootstrap-1",
+            name: "Old todo",
+          });
+          const secondEvent = yield* EventInstance.make(todoCreated, {
+            id: "bootstrap-2",
+            name: "Latest todo",
+          });
+
+          yield* primary.push(firstEvent, secondEvent);
+
+          yield* replica.poke();
+          yield* waitForBootstrappedTodos(1);
+
+          const bootstrapped = yield* projection.query((todos) => todos);
+          assert.deepStrictEqual(bootstrapped, [
+            {
+              id: "bootstrapped-head",
+              name: secondEvent.eventId,
+            },
+          ]);
+          assert.strictEqual(acceptedHandlerRuns, 0);
+
+          const thirdEvent = yield* EventInstance.make(todoCreated, {
+            id: "bootstrap-3",
+            name: "After bootstrap",
+          });
+          yield* primary.push(thirdEvent);
+          yield* replica.poke();
+          yield* waitForReplicaHandler(1);
+
+          assert.strictEqual(acceptedHandlerRuns, 1);
+        }),
+      ),
+    30000,
   );
 });
