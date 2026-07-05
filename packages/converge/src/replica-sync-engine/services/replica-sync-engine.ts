@@ -67,6 +67,15 @@ export interface IReplicaSyncEngine {
    * @category service-method-interface
    */
   setLatest(): Effect.Effect<void>;
+
+  /**
+   * Re-bootstraps all projections at the active sync mode's sequence without
+   * changing the mode. Used to recover from a broken event chain.
+   *
+   * @since 0.0.0
+   * @category service-method-interface
+   */
+  repair(): Effect.Effect<void>;
 }
 
 /**

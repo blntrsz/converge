@@ -1,4 +1,9 @@
-import { IndexedDb, IndexedDbDatabase, IndexedDbTable, IndexedDbVersion } from "@effect/platform-browser";
+import {
+  IndexedDb,
+  IndexedDbDatabase,
+  IndexedDbTable,
+  IndexedDbVersion,
+} from "@effect/platform-browser";
 import { Effect, Layer, Option, Queue, Ref, Result, Schema, Semaphore, Stream } from "effect";
 import { EventId } from "../../event/event-id.ts";
 import { EventInstance } from "../../event/event-instance.ts";
@@ -210,24 +215,22 @@ export const layer: Layer.Layer<
 
     const deleteProposedEvent = (eventId: string) =>
       Effect.gen(function* () {
-        const rows = yield* proposedEvents
-          .select("eventId")
-          .equals(eventId)
-          .pipe(Effect.orDie);
+        const rows = yield* proposedEvents.select("eventId").equals(eventId).pipe(Effect.orDie);
         const row = rows[0] as ProposedEventRow | undefined;
         if (row) {
-          yield* proposedEvents.delete().equals(row.id as never).pipe(Effect.asVoid, Effect.orDie);
+          yield* proposedEvents
+            .delete()
+            .equals(row.id as never)
+            .pipe(Effect.asVoid, Effect.orDie);
         }
       });
 
     const scanAllProposedEvents = () =>
-      proposedEvents
-        .select()
-        .pipe(
-          Effect.map((rows) => rows as ReadonlyArray<ProposedEventRow>),
-          Effect.map((rows) => rows.map(eventFromProposedRow)),
-          Effect.orDie,
-        );
+      proposedEvents.select().pipe(
+        Effect.map((rows) => rows as ReadonlyArray<ProposedEventRow>),
+        Effect.map((rows) => rows.map(eventFromProposedRow)),
+        Effect.orDie,
+      );
 
     const findHandler = (eventType: string) => eventRouter.find(eventType);
 
@@ -237,45 +240,49 @@ export const layer: Layer.Layer<
         if (!handler) return;
 
         yield* applyContext.set({ phase, eventId: event.eventId });
-        yield* handler.run(event).pipe(
-          Effect.ensuring(applyContext.set({ phase: "accepted", eventId: "" })),
-        );
+        yield* handler
+          .run(event)
+          .pipe(Effect.ensuring(applyContext.set({ phase: "accepted", eventId: "" })));
       }).pipe(Effect.orDie);
 
     const applyLocally = (event: EventInstance) =>
-      acceptLock.withPermits(1)(
-        Effect.gen(function* () {
-          const existing = yield* findAcceptedEvent(event.eventId);
-          if (Option.isSome(existing)) return;
+      acceptLock
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const existing = yield* findAcceptedEvent(event.eventId);
+            if (Option.isSome(existing)) return;
 
-          const proposed = yield* findProposedEvent(event.eventId);
-          yield* runHandler(event, "accepted");
+            const proposed = yield* findProposedEvent(event.eventId);
+            yield* runHandler(event, "accepted");
 
-          yield* appendAcceptedEvent(event);
-          if (Option.isSome(proposed)) {
-            yield* deleteProposedEvent(event.eventId);
-          }
-        }),
-      ).pipe(Effect.orDie);
+            yield* appendAcceptedEvent(event);
+            if (Option.isSome(proposed)) {
+              yield* deleteProposedEvent(event.eventId);
+            }
+          }),
+        )
+        .pipe(Effect.orDie);
 
     const proposeAndApplyOptimistically = (event: EventInstance) =>
-      acceptLock.withPermits(1)(
-        Effect.gen(function* () {
-          const accepted = yield* findAcceptedEvent(event.eventId);
-          if (Option.isSome(accepted)) return;
+      acceptLock
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const accepted = yield* findAcceptedEvent(event.eventId);
+            if (Option.isSome(accepted)) return;
 
-          const proposed = yield* findProposedEvent(event.eventId);
-          if (Option.isSome(proposed)) return;
+            const proposed = yield* findProposedEvent(event.eventId);
+            if (Option.isSome(proposed)) return;
 
-          const row: ProposedEventInsert = {
-            eventId: event.eventId,
-            eventType: event.eventType,
-            eventDetails: event.eventDetails as ProposedEventInsert["eventDetails"],
-          };
-          yield* proposedEvents.insert(row as never).pipe(Effect.asVoid, Effect.orDie);
-          yield* runHandler(event, "optimistic");
-        }),
-      ).pipe(Effect.orDie);
+            const row: ProposedEventInsert = {
+              eventId: event.eventId,
+              eventType: event.eventType,
+              eventDetails: event.eventDetails as ProposedEventInsert["eventDetails"],
+            };
+            yield* proposedEvents.insert(row as never).pipe(Effect.asVoid, Effect.orDie);
+            yield* runHandler(event, "optimistic");
+          }),
+        )
+        .pipe(Effect.orDie);
 
     const insertPendingTask = (row: Record<string, unknown>) =>
       pendingTasks.insert(row as never).pipe(
@@ -290,12 +297,10 @@ export const layer: Layer.Layer<
         .pipe(Effect.asVoid, Effect.orDie);
 
     const scanAllPendingTasks = () =>
-      pendingTasks
-        .select()
-        .pipe(
-          Effect.map((rows) => rows as ReadonlyArray<PendingTaskRow>),
-          Effect.orDie,
-        );
+      pendingTasks.select().pipe(
+        Effect.map((rows) => rows as ReadonlyArray<PendingTaskRow>),
+        Effect.orDie,
+      );
 
     const lastEventId = () =>
       eventHistory
@@ -304,7 +309,9 @@ export const layer: Layer.Layer<
         .limit(1)
         .pipe(
           Effect.map((rows) =>
-            Option.fromUndefinedOr(rows[0]).pipe(Option.map((row) => (row as EventHistoryRow).eventId)),
+            Option.fromUndefinedOr(rows[0]).pipe(
+              Option.map((row) => (row as EventHistoryRow).eventId),
+            ),
           ),
           Effect.orDie,
         );
@@ -369,14 +376,12 @@ export const layer: Layer.Layer<
         for (const projection of projections.all) {
           const primaryProjection = primaryProjections.find(projection.key);
           if (!primaryProjection) {
-            return yield* Effect.die(
-              new Error(`Missing primary projection for ${projection.key}`),
-            );
+            return yield* Effect.die(new Error(`Missing primary projection for ${projection.key}`));
           }
 
-          const rows = primaryProjection.bootstrap({ eventId }).pipe(
-            Stream.mapError((error) => error as unknown),
-          );
+          const rows = primaryProjection
+            .bootstrap({ eventId })
+            .pipe(Stream.mapError((error) => error as unknown));
           yield* projection.bootstrap(rows);
         }
 
@@ -459,34 +464,32 @@ export const layer: Layer.Layer<
      * @since 0.0.0
      * @category service-method
      */
-    const push: IReplicaSyncEngine["push"] = Effect.fn("ReplicaSyncEngine.push")(
-      function* (...events) {
-        const mode = yield* Ref.get(syncMode);
-        if (mode._tag === "Checkout") return;
+    const push: IReplicaSyncEngine["push"] = Effect.fn("ReplicaSyncEngine.push")(function* (
+      ...events
+    ) {
+      const mode = yield* Ref.get(syncMode);
+      if (mode._tag === "Checkout") return;
 
-        for (const event of events) {
-          yield* proposeAndApplyOptimistically(event);
-        }
-        if (events.length > 0) {
-          const taskId = yield* insertPendingTask({ kind: "forward" });
-          yield* Queue.offer(queue, { kind: "forward", taskId });
-        }
-      },
-    );
+      for (const event of events) {
+        yield* proposeAndApplyOptimistically(event);
+      }
+      if (events.length > 0) {
+        const taskId = yield* insertPendingTask({ kind: "forward" });
+        yield* Queue.offer(queue, { kind: "forward", taskId });
+      }
+    });
 
     /**
      * @since 0.0.0
      * @category service-method
      */
-    const poke: IReplicaSyncEngine["poke"] = Effect.fn("ReplicaSyncEngine.poke")(
-      function* () {
-        const mode = yield* Ref.get(syncMode);
-        if (mode._tag === "Checkout") return;
+    const poke: IReplicaSyncEngine["poke"] = Effect.fn("ReplicaSyncEngine.poke")(function* () {
+      const mode = yield* Ref.get(syncMode);
+      if (mode._tag === "Checkout") return;
 
-        const taskId = yield* insertPendingTask({ kind: "reconcile" });
-        yield* Queue.offer(queue, { kind: "reconcile", taskId });
-      },
-    );
+      const taskId = yield* insertPendingTask({ kind: "reconcile" });
+      yield* Queue.offer(queue, { kind: "reconcile", taskId });
+    });
 
     /**
      * @since 0.0.0
@@ -497,9 +500,7 @@ export const layer: Layer.Layer<
         if (projections.all.length > 0) {
           const event = yield* primary.getEvent(eventId);
           if (Option.isNone(event)) {
-            return yield* Effect.die(
-              new Error(`Cannot checkout unknown eventId ${eventId}`),
-            );
+            return yield* Effect.die(new Error(`Cannot checkout unknown eventId ${eventId}`));
           }
 
           yield* bootstrapReplicaProjectionsAt(event.value, {
@@ -517,7 +518,40 @@ export const layer: Layer.Layer<
      */
     const setLatest: IReplicaSyncEngine["setLatest"] = Effect.fn("ReplicaSyncEngine.setLatest")(
       function* () {
+        if (projections.all.length > 0) {
+          const latestEvent = yield* primary.getLatestEvent();
+          if (Option.isSome(latestEvent)) {
+            yield* bootstrapReplicaProjectionsAt(latestEvent.value, {
+              replaceSyncPosition: true,
+            }).pipe(Effect.orDie);
+          }
+        }
+
         yield* Ref.set(syncMode, { _tag: "Latest" });
+      },
+    );
+
+    const repair: IReplicaSyncEngine["repair"] = Effect.fn("ReplicaSyncEngine.repair")(
+      function* () {
+        if (projections.all.length === 0) return;
+
+        const mode = yield* Ref.get(syncMode);
+        if (mode._tag === "Checkout") {
+          const event = yield* primary.getEvent(mode.eventId);
+          if (Option.isNone(event)) {
+            return yield* Effect.die(new Error(`Cannot repair at unknown eventId ${mode.eventId}`));
+          }
+          yield* bootstrapReplicaProjectionsAt(event.value, {
+            replaceSyncPosition: true,
+          }).pipe(Effect.orDie);
+        } else {
+          const latestEvent = yield* primary.getLatestEvent();
+          if (Option.isSome(latestEvent)) {
+            yield* bootstrapReplicaProjectionsAt(latestEvent.value, {
+              replaceSyncPosition: true,
+            }).pipe(Effect.orDie);
+          }
+        }
       },
     );
 
@@ -527,6 +561,7 @@ export const layer: Layer.Layer<
       poke,
       checkout,
       setLatest,
+      repair,
     });
   }),
 );

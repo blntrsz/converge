@@ -182,7 +182,9 @@ const resetCounters = () => {
   rejectedHandlerRuns = 0;
 };
 
-const waitForPrimaryEvent = (eventId: string): Effect.Effect<void, never, PrimarySyncEngine.PrimarySyncEngine> =>
+const waitForPrimaryEvent = (
+  eventId: string,
+): Effect.Effect<void, never, PrimarySyncEngine.PrimarySyncEngine> =>
   Effect.gen(function* () {
     const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
     for (let i = 0; i < 200; i++) {
@@ -543,6 +545,150 @@ layer(ReplicaSyncEngineWithBootstrapLayer)((it) => {
             },
           ]);
           assert.strictEqual(acceptedHandlerRuns, 0);
+        }),
+      ),
+    30000,
+  );
+
+  it.effect(
+    "setLatest re-bootstraps projections to head and resumes sync",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+          const projection = yield* BootstrapTodoProjection;
+          yield* projection.bootstrap(Stream.empty);
+
+          const olderEvent = yield* EventInstance.make(todoCreated, {
+            id: "setlatest-older",
+            name: "Older todo",
+          });
+          const newerEvent = yield* EventInstance.make(todoCreated, {
+            id: "setlatest-newer",
+            name: "Newer todo",
+          });
+
+          yield* primary.push(olderEvent, newerEvent);
+
+          yield* replica.checkout(olderEvent.eventId);
+          let bootstrapped = yield* projection.query((todos) => todos);
+          assert.deepStrictEqual(bootstrapped, [
+            {
+              id: "bootstrapped-head",
+              name: olderEvent.eventId,
+            },
+          ]);
+
+          yield* replica.setLatest();
+          assert.deepStrictEqual(yield* replica.mode, { _tag: "Latest" });
+
+          bootstrapped = yield* projection.query((todos) => todos);
+          assert.deepStrictEqual(bootstrapped, [
+            {
+              id: "bootstrapped-head",
+              name: newerEvent.eventId,
+            },
+          ]);
+
+          const afterEvent = yield* EventInstance.make(todoCreated, {
+            id: "setlatest-after",
+            name: "After setLatest",
+          });
+          yield* primary.push(afterEvent);
+          yield* replica.poke();
+          yield* waitForReplicaHandler(1);
+
+          assert.strictEqual(acceptedHandlerRuns, 1);
+        }),
+      ),
+    30000,
+  );
+
+  it.effect(
+    "repair re-bootstraps projections at the active sync mode sequence",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+          const projection = yield* BootstrapTodoProjection;
+          yield* projection.bootstrap(Stream.empty);
+
+          const olderEvent = yield* EventInstance.make(todoCreated, {
+            id: "repair-older",
+            name: "Older todo",
+          });
+          const newerEvent = yield* EventInstance.make(todoCreated, {
+            id: "repair-newer",
+            name: "Newer todo",
+          });
+
+          yield* primary.push(olderEvent, newerEvent);
+
+          yield* replica.checkout(olderEvent.eventId);
+          let bootstrapped = yield* projection.query((todos) => todos);
+          assert.deepStrictEqual(bootstrapped, [
+            {
+              id: "bootstrapped-head",
+              name: olderEvent.eventId,
+            },
+          ]);
+
+          yield* projection.bootstrap(Stream.empty);
+          assert.deepStrictEqual(yield* projection.query((todos) => todos), []);
+
+          yield* replica.repair();
+
+          assert.deepStrictEqual(yield* replica.mode, {
+            _tag: "Checkout",
+            eventId: olderEvent.eventId,
+          });
+
+          bootstrapped = yield* projection.query((todos) => todos);
+          assert.deepStrictEqual(bootstrapped, [
+            {
+              id: "bootstrapped-head",
+              name: olderEvent.eventId,
+            },
+          ]);
+        }),
+      ),
+    30000,
+  );
+
+  it.effect(
+    "repair in Latest mode re-bootstraps projections at primary head",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+          const projection = yield* BootstrapTodoProjection;
+          yield* replica.setLatest();
+          yield* projection.bootstrap(Stream.empty);
+
+          const headEvent = yield* EventInstance.make(todoCreated, {
+            id: "repair-latest-head",
+            name: "Head todo",
+          });
+
+          yield* primary.push(headEvent);
+
+          yield* replica.repair();
+
+          assert.deepStrictEqual(yield* replica.mode, { _tag: "Latest" });
+
+          const bootstrapped = yield* projection.query((todos) => todos);
+          assert.deepStrictEqual(bootstrapped, [
+            {
+              id: "bootstrapped-head",
+              name: headEvent.eventId,
+            },
+          ]);
         }),
       ),
     30000,
