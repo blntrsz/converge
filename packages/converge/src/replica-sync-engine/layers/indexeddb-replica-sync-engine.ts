@@ -431,6 +431,30 @@ export const layer: Layer.Layer<
         yield* deletePendingTask(task.taskId);
       });
 
+    const repair: IReplicaSyncEngine["repair"] = Effect.fn("ReplicaSyncEngine.repair")(
+      function* () {
+        if (projections.all.length === 0) return;
+
+        const mode = yield* Ref.get(syncMode);
+        if (mode._tag === "Checkout") {
+          const event = yield* primary.getEvent(mode.eventId);
+          if (Option.isNone(event)) {
+            return yield* Effect.die(new Error(`Cannot repair at unknown eventId ${mode.eventId}`));
+          }
+          yield* bootstrapReplicaProjectionsAt(event.value, {
+            replaceSyncPosition: true,
+          }).pipe(Effect.orDie);
+        } else {
+          const latestEvent = yield* primary.getLatestEvent();
+          if (Option.isSome(latestEvent)) {
+            yield* bootstrapReplicaProjectionsAt(latestEvent.value, {
+              replaceSyncPosition: true,
+            }).pipe(Effect.orDie);
+          }
+        }
+      },
+    );
+
     const queue = yield* Queue.unbounded<Task>();
 
     const recoverPendingTasks = Effect.gen(function* () {
@@ -451,7 +475,15 @@ export const layer: Layer.Layer<
         yield* Effect.logInfo(`ReplicaSyncEngine: consumer processing task ${task.kind}`);
         yield* process(task).pipe(
           Effect.catchCause((cause) =>
-            Effect.logWarning(`ReplicaSyncEngine: consumer task failed — ${cause}`),
+            Effect.gen(function* () {
+              yield* Effect.logWarning(`ReplicaSyncEngine: consumer task failed — ${cause}`);
+              yield* Effect.logInfo("ReplicaSyncEngine: auto-repairing");
+              yield* repair().pipe(
+                Effect.catchCause((repairCause) =>
+                  Effect.logError(`ReplicaSyncEngine: auto-repair failed — ${repairCause}`),
+                ),
+              );
+            }),
           ),
         );
         yield* Effect.logInfo(`ReplicaSyncEngine: consumer finished task ${task.kind}`);
@@ -528,30 +560,6 @@ export const layer: Layer.Layer<
         }
 
         yield* Ref.set(syncMode, { _tag: "Latest" });
-      },
-    );
-
-    const repair: IReplicaSyncEngine["repair"] = Effect.fn("ReplicaSyncEngine.repair")(
-      function* () {
-        if (projections.all.length === 0) return;
-
-        const mode = yield* Ref.get(syncMode);
-        if (mode._tag === "Checkout") {
-          const event = yield* primary.getEvent(mode.eventId);
-          if (Option.isNone(event)) {
-            return yield* Effect.die(new Error(`Cannot repair at unknown eventId ${mode.eventId}`));
-          }
-          yield* bootstrapReplicaProjectionsAt(event.value, {
-            replaceSyncPosition: true,
-          }).pipe(Effect.orDie);
-        } else {
-          const latestEvent = yield* primary.getLatestEvent();
-          if (Option.isSome(latestEvent)) {
-            yield* bootstrapReplicaProjectionsAt(latestEvent.value, {
-              replaceSyncPosition: true,
-            }).pipe(Effect.orDie);
-          }
-        }
       },
     );
 

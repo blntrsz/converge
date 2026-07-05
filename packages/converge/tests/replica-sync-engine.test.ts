@@ -42,12 +42,17 @@ let replicaHandlerRuns = 0;
 let optimisticHandlerRuns = 0;
 let acceptedHandlerRuns = 0;
 let rejectedHandlerRuns = 0;
+let shouldThrow = false;
 
 const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* () {
     const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
     const { phase } = yield* applyContext.current;
+
+    if (shouldThrow && phase === "accepted") {
+      yield* Effect.die(new Error("Simulated broken event chain"));
+    }
 
     yield* Effect.sync(() => {
       replicaHandlerRuns += 1;
@@ -180,6 +185,7 @@ const resetCounters = () => {
   optimisticHandlerRuns = 0;
   acceptedHandlerRuns = 0;
   rejectedHandlerRuns = 0;
+  shouldThrow = false;
 };
 
 const waitForPrimaryEvent = (
@@ -687,6 +693,51 @@ layer(ReplicaSyncEngineWithBootstrapLayer)((it) => {
             {
               id: "bootstrapped-head",
               name: headEvent.eventId,
+            },
+          ]);
+        }),
+      ),
+    30000,
+  );
+
+  it.effect(
+    "consumer auto-repairs after a broken event chain failure",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+          const projection = yield* BootstrapTodoProjection;
+          yield* replica.setLatest();
+          yield* projection.bootstrap(Stream.empty);
+
+          const headEvent = yield* EventInstance.make(todoCreated, {
+            id: "repair-auto-head",
+            name: "Head todo",
+          });
+          yield* primary.push(headEvent);
+          yield* replica.poke();
+          yield* waitForBootstrappedTodos(1);
+
+          yield* projection.bootstrap(Stream.empty);
+          assert.deepStrictEqual(yield* projection.query((todos) => todos), []);
+
+          shouldThrow = true;
+          const failingEvent = yield* EventInstance.make(todoCreated, {
+            id: "repair-auto-fail",
+            name: "Failing todo",
+          });
+          yield* primary.push(failingEvent);
+          yield* replica.poke();
+          yield* waitForBootstrappedTodos(1);
+          shouldThrow = false;
+
+          const bootstrapped = yield* projection.query((todos) => todos);
+          assert.deepStrictEqual(bootstrapped, [
+            {
+              id: "bootstrapped-head",
+              name: failingEvent.eventId,
             },
           ]);
         }),
