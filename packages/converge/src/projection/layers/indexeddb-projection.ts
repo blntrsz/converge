@@ -8,6 +8,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect";
 import { ReplicaApplyContext } from "../../replica-sync-engine/services/apply-context.ts";
 import {
   make,
+  type BootstrapFn,
   ProjectionStorageError,
   type IReactiveProjection,
   type ProjectionStorage,
@@ -136,10 +137,14 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
  * @since 0.0.0
  * @category layer
  */
-export function indexedDbLayer<TIdentifier, const TSchema extends Schema.Schema<any>>(
+export function indexedDbLayer<
+  TIdentifier,
+  const TSchema extends Schema.Schema<any>,
+  TBootstrapRow = never,
+>(
   tag: Context.Service<
     TIdentifier,
-    IReactiveProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError>
+    IReactiveProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError, TBootstrapRow>
   >,
   options: {
     readonly databaseName?: string;
@@ -149,6 +154,11 @@ export function indexedDbLayer<TIdentifier, const TSchema extends Schema.Schema<
       readonly EncodingServices: never;
     };
     readonly initialValue: Schema.Schema.Type<TSchema>;
+    readonly bootstrap?: BootstrapFn<
+      Schema.Schema.Type<TSchema>,
+      TBootstrapRow,
+      ProjectionStorageError
+    >;
   },
 ): Layer.Layer<
   TIdentifier,
@@ -162,6 +172,7 @@ export function indexedDbLayer<TIdentifier, const TSchema extends Schema.Schema<
       return yield* make({
         initialValue: options.initialValue,
         storage,
+        bootstrap: options.bootstrap,
       });
     }),
   ).pipe(Layer.provide(databaseLayer(options.databaseName)));
@@ -171,10 +182,14 @@ export function indexedDbLayer<TIdentifier, const TSchema extends Schema.Schema<
  * @since 0.0.0
  * @category layer
  */
-export function indexedDbReplicaLayer<TIdentifier, const TSchema extends Schema.Schema<any>>(
+export function indexedDbReplicaLayer<
+  TIdentifier,
+  const TSchema extends Schema.Schema<any>,
+  TBootstrapRow = never,
+>(
   tag: Context.Service<
     TIdentifier,
-    IReactiveProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError>
+    IReactiveProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError, TBootstrapRow>
   >,
   options: {
     readonly databaseName?: string;
@@ -184,6 +199,11 @@ export function indexedDbReplicaLayer<TIdentifier, const TSchema extends Schema.
       readonly EncodingServices: never;
     };
     readonly initialValue: Schema.Schema.Type<TSchema>;
+    readonly bootstrap?: BootstrapFn<
+      Schema.Schema.Type<TSchema>,
+      TBootstrapRow,
+      ProjectionStorageError
+    >;
   },
 ): Layer.Layer<
   TIdentifier,
@@ -199,6 +219,7 @@ export function indexedDbReplicaLayer<TIdentifier, const TSchema extends Schema.
         initialValue: options.initialValue,
         storage,
         mutationContext,
+        bootstrap: options.bootstrap,
       });
     }),
   ).pipe(Layer.provide(databaseLayer(options.databaseName)));

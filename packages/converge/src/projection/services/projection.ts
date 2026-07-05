@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Effect, Layer, Option, Schema, Semaphore, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AtomRef from "effect/unstable/reactivity/AtomRef";
 import type { Context } from "effect";
@@ -28,6 +28,14 @@ export type MutationFn<TSnapshot, A, TError = never> = (
  * @since 0.0.0
  * @category model
  */
+export type BootstrapFn<TSnapshot, TRow, TError = never> = (
+  rows: Stream.Stream<TRow, unknown, never>,
+) => Effect.Effect<TSnapshot, TError | unknown>;
+
+/**
+ * @since 0.0.0
+ * @category model
+ */
 export type MutationPhase = "optimistic" | "accepted" | "rejected";
 
 /**
@@ -45,7 +53,7 @@ export interface MutationContext {
  * @since 0.0.0
  * @category service-interface
  */
-export interface IProjection<TSnapshot, TError = never> {
+export interface IProjection<TSnapshot, TError = never, TBootstrapRow = never> {
   readonly query: <A>(filter: (current: TSnapshot) => A) => Effect.Effect<A>;
   readonly mutation: <A>(
     f: MutationFn<TSnapshot, A, TError>,
@@ -55,14 +63,17 @@ export interface IProjection<TSnapshot, TError = never> {
     f: MutationFn<TSnapshot, A, TError>,
   ) => Effect.Effect<A, TError>;
   readonly removeOptimisticMutation: (id: string) => Effect.Effect<void, TError>;
+  readonly bootstrap: (
+    rows: Stream.Stream<TBootstrapRow, unknown, never>,
+  ) => Effect.Effect<void, TError | unknown>;
 }
 
 /**
  * @since 0.0.0
  * @category service-interface
  */
-export interface IReactiveProjection<TSnapshot, TError = never>
-  extends IProjection<TSnapshot, TError> {
+export interface IReactiveProjection<TSnapshot, TError = never, TBootstrapRow = never>
+  extends IProjection<TSnapshot, TError, TBootstrapRow> {
   readonly atom: Atom.Atom<TSnapshot>;
 }
 
@@ -106,12 +117,14 @@ const reapplyOptimisticMutations = <TSnapshot, TError>(
 export function make<
   TSnapshot,
   TStorage extends ProjectionStorage<TSnapshot, any> | undefined,
+  TBootstrapRow = never,
 >(options: {
   readonly initialValue: TSnapshot;
   readonly storage?: TStorage;
   readonly mutationContext?: MutationContext;
+  readonly bootstrap?: BootstrapFn<TSnapshot, TBootstrapRow, StorageError<TStorage>>;
 }): Effect.Effect<
-  IReactiveProjection<TSnapshot, StorageError<TStorage>>,
+  IReactiveProjection<TSnapshot, StorageError<TStorage>, TBootstrapRow>,
   StorageError<TStorage>
 > {
   return Effect.gen(function* () {
@@ -196,6 +209,18 @@ export function make<
         return value;
       });
 
+    const applyBootstrap = (rows: Stream.Stream<TBootstrapRow, unknown, never>) =>
+      Effect.gen(function* () {
+        if (!options.bootstrap) {
+          return yield* Effect.die(new Error("Projection bootstrap is not configured"));
+        }
+
+        const snapshot = yield* options.bootstrap(rows);
+        optimisticMutations.clear();
+        yield* persistSnapshot(snapshot);
+        ref.set(snapshot);
+      });
+
     const atom = Atom.make((get) => {
       const unsubscribe = ref.subscribe((snapshot) => {
         get.setSelf(snapshot);
@@ -213,6 +238,7 @@ export function make<
         lock.withPermits(1)(applyOptimisticMutation(id, f)),
       removeOptimisticMutation: (id) =>
         lock.withPermits(1)(removeOptimisticMutation(id)),
+      bootstrap: (rows) => lock.withPermits(1)(applyBootstrap(rows)),
       mutation: (f) =>
         lock.withPermits(1)(
           Effect.gen(function* () {
@@ -243,15 +269,17 @@ export function layer<
   TIdentifier,
   TSnapshot,
   TStorage extends ProjectionStorage<TSnapshot, any> | undefined = undefined,
+  TBootstrapRow = never,
 >(
   tag: Context.Service<
     TIdentifier,
-    IReactiveProjection<TSnapshot, StorageError<TStorage>>
+    IReactiveProjection<TSnapshot, StorageError<TStorage>, TBootstrapRow>
   >,
   options: {
     readonly initialValue: TSnapshot;
     readonly storage?: TStorage;
     readonly mutationContext?: MutationContext;
+    readonly bootstrap?: BootstrapFn<TSnapshot, TBootstrapRow, StorageError<TStorage>>;
   },
 ): Layer.Layer<TIdentifier, StorageError<TStorage>> {
   return Layer.effect(tag, make(options));

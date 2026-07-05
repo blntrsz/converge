@@ -1,6 +1,6 @@
 import { IndexedDb } from "@effect/platform-browser";
 import { assert, describe, it } from "@effect/vitest";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema, Stream } from "effect";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { Event, EventHandler, EventInstance } from "../src/index.ts";
@@ -30,7 +30,7 @@ type Todo = Schema.Schema.Type<typeof TodoSchema>;
 
 class TodoProjection extends Context.Service<
   TodoProjection,
-  Projection.IReactiveProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+  Projection.IReactiveProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError, Todo>
 >()("TodoProjection") {}
 
 const sortTodos = (todos: ReadonlyArray<Todo>) =>
@@ -93,6 +93,19 @@ const indexedDbProjectionLayer = (databaseName: string) =>
     key: "todos",
     schema: TodoListSchema,
     initialValue: [] as ReadonlyArray<Todo>,
+  }).pipe(Layer.provide(FakeIndexedDbLayer));
+
+const bootstrappingIndexedDbProjectionLayer = (databaseName: string) =>
+  IndexedDbProjection.indexedDbLayer(TodoProjection, {
+    databaseName,
+    key: "todos",
+    schema: TodoListSchema,
+    initialValue: [] as ReadonlyArray<Todo>,
+    bootstrap: (rows: Stream.Stream<Todo, unknown>) =>
+      rows.pipe(
+        Stream.runCollect,
+        Effect.map((snapshot) => Array.from(snapshot)),
+      ),
   }).pipe(Layer.provide(FakeIndexedDbLayer));
 
 describe("Projection", () => {
@@ -173,6 +186,41 @@ describe("Projection", () => {
 
       assert.deepStrictEqual(hydrated, [
         { id: "1", title: "Stored", completed: true, createdAt: 1 },
+      ]);
+    }),
+  );
+
+  it.effect("bootstraps and persists snapshots with IndexedDB", () =>
+    Effect.gen(function* () {
+      const databaseName = `projection-bootstrap-${Date.now()}-${Math.random()}`;
+      const writeLayer = bootstrappingIndexedDbProjectionLayer(databaseName);
+      const readLayer = indexedDbProjectionLayer(databaseName);
+
+      yield* Effect.gen(function* () {
+        const projection = yield* TodoProjection;
+
+        yield* projection.bootstrap(
+          Stream.make({
+            id: "bootstrapped-1",
+            title: "Bootstrapped",
+            completed: false,
+            createdAt: 1,
+          }),
+        );
+      }).pipe(Effect.provide(writeLayer));
+
+      const hydrated = yield* Effect.gen(function* () {
+        const projection = yield* TodoProjection;
+        return yield* projection.query((todos) => todos);
+      }).pipe(Effect.provide(readLayer));
+
+      assert.deepStrictEqual(hydrated, [
+        {
+          id: "bootstrapped-1",
+          title: "Bootstrapped",
+          completed: false,
+          createdAt: 1,
+        },
       ]);
     }),
   );
