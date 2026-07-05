@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Effect, Layer, Option, Result, Schema } from "effect";
+import { Effect, Layer, Option, Result, Schema, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import {
@@ -9,6 +9,7 @@ import {
   EventRouter,
   HttpPrimarySyncEngine,
   PostgresPrimarySyncEngine,
+  PrimaryProjection,
   PrimarySyncEngine,
 } from "../src/index.ts";
 import { PgliteSqlClient } from "../src/pglite-client.ts";
@@ -30,6 +31,16 @@ const todoDeleted = Event.make("todo.deleted.v1", {
 
 const todoRetryCounted = Event.make("todo.retry-counted.v1", {
   id: Schema.String,
+});
+
+const TodoProjectionRow = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+});
+
+const EncodedProjectionRow = Schema.Struct({
+  id: Schema.String,
+  count: Schema.NumberFromString,
 });
 
 let todoRetryCountedHandlerRuns = 0;
@@ -95,12 +106,7 @@ const PgSqlClientWithAllMigrations = migrationsLayer.pipe(
 );
 
 const EventRouterLayer = EventRouter.layer({
-  handlers: [
-    todoCreatedHandler,
-    todoUpdatedHandler,
-    todoDeletedHandler,
-    todoRetryCountedHandler,
-  ],
+  handlers: [todoCreatedHandler, todoUpdatedHandler, todoDeletedHandler, todoRetryCountedHandler],
 });
 
 const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
@@ -111,6 +117,32 @@ const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
 const PrimarySyncEngineOnlyLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provide(EventRouterLayer),
   Layer.provide(PgSqlClientWithAllMigrations),
+);
+
+const PrimarySyncEngineWithEmptyProjectionLayer = Layer.mergeAll(
+  PrimarySyncEngineOnlyLayer,
+  PrimaryProjection.emptyLayer,
+);
+
+const TodoPrimaryProjectionLayer = PrimaryProjection.layer({
+  projections: [
+    {
+      key: "todos",
+      rowSchema: TodoProjectionRow,
+      bootstrap: () =>
+        Stream.make({ id: "todo-1", name: "Buy coffee" }, { id: "todo-2", name: "Read docs" }),
+    },
+    {
+      key: "encoded",
+      rowSchema: EncodedProjectionRow,
+      bootstrap: () => Stream.make({ id: "encoded-1", count: 3 }),
+    },
+  ],
+});
+
+const PrimarySyncEngineWithProjectionLayer = Layer.mergeAll(
+  PrimarySyncEngineOnlyLayer,
+  TodoPrimaryProjectionLayer,
 );
 
 layer(PrimarySyncEngineLayer)((it) => {
@@ -269,7 +301,7 @@ layer(PrimarySyncEngineLayer)((it) => {
   );
 
   it.effect("serves primary sync over HTTP", () => {
-    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineOnlyLayer, {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineWithEmptyProjectionLayer, {
       prefix: "/sync",
       disableLogger: true,
     });
@@ -325,7 +357,7 @@ layer(PrimarySyncEngineLayer)((it) => {
   });
 
   it.effect("serves getLatestEvent and getEvent over HTTP", () => {
-    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineOnlyLayer, {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineWithEmptyProjectionLayer, {
       prefix: "/sync",
       disableLogger: true,
     });
@@ -373,5 +405,96 @@ layer(PrimarySyncEngineLayer)((it) => {
       ),
       Effect.ensuring(Effect.promise(() => server.dispose())),
     );
+  });
+
+  it.effect("serves primary projection rows over HTTP", () => {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineWithProjectionLayer, {
+      prefix: "/sync",
+      disableLogger: true,
+    });
+    const fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      server.handler(
+        new Request(input instanceof Request ? input.url : String(input), init),
+      )) as typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const response = yield* Effect.promise(() =>
+        fetch("http://test/sync/projection/todos?eventId=event-1"),
+      );
+      assert.strictEqual(response.status, 200);
+
+      const body = yield* Effect.promise(() => response.text());
+      assert.deepStrictEqual(
+        body
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+        [
+          { id: "todo-1", name: "Buy coffee" },
+          { id: "todo-2", name: "Read docs" },
+        ],
+      );
+    }).pipe(Effect.ensuring(Effect.promise(() => server.dispose())));
+  });
+
+  it.effect("rejects primary projection requests without an eventId", () => {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineWithProjectionLayer, {
+      prefix: "/sync",
+      disableLogger: true,
+    });
+    const fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      server.handler(
+        new Request(input instanceof Request ? input.url : String(input), init),
+      )) as typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const response = yield* Effect.promise(() => fetch("http://test/sync/projection/todos"));
+
+      assert.strictEqual(response.status, 400);
+    }).pipe(Effect.ensuring(Effect.promise(() => server.dispose())));
+  });
+
+  it.effect("returns not found for unknown primary projections", () => {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineWithProjectionLayer, {
+      prefix: "/sync",
+      disableLogger: true,
+    });
+    const fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      server.handler(
+        new Request(input instanceof Request ? input.url : String(input), init),
+      )) as typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const response = yield* Effect.promise(() =>
+        fetch("http://test/sync/projection/missing?eventId=event-1"),
+      );
+
+      assert.strictEqual(response.status, 404);
+    }).pipe(Effect.ensuring(Effect.promise(() => server.dispose())));
+  });
+
+  it.effect("encodes primary projection rows with their schema", () => {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineWithProjectionLayer, {
+      prefix: "/sync",
+      disableLogger: true,
+    });
+    const fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      server.handler(
+        new Request(input instanceof Request ? input.url : String(input), init),
+      )) as typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const response = yield* Effect.promise(() =>
+        fetch("http://test/sync/projection/encoded?eventId=event-1"),
+      );
+
+      assert.strictEqual(response.status, 200);
+
+      const body = yield* Effect.promise(() => response.text());
+      assert.deepStrictEqual(JSON.parse(body.trim()), {
+        id: "encoded-1",
+        count: "3",
+      });
+    }).pipe(Effect.ensuring(Effect.promise(() => server.dispose())));
   });
 });

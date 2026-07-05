@@ -1,10 +1,8 @@
-import { Effect, Layer, Option, Result, Schema } from "effect";
-import {
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { Effect, Layer, Option, Result, Schema, Stream } from "effect";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import * as EventId from "../../event/event-id.ts";
 import { EventInstance } from "../../event/event-instance.ts";
+import { PrimaryProjectionRouter } from "../services/primary-projection.ts";
 import { PrimarySyncEngine, type IPrimarySyncEngine } from "../services/primary-sync-engine.ts";
 
 /**
@@ -147,9 +145,7 @@ export const eventToWire = (event: EventInstance): WireEvent => ({
 export const pullPageFromWire = (page: WirePullPage): PrimarySyncPullPage => {
   const data = page.data.map(eventFromWire);
 
-  return page.hasNext
-    ? { data, hasNext: true, cursor: page.cursor }
-    : { data, hasNext: false };
+  return page.hasNext ? { data, hasNext: true, cursor: page.cursor } : { data, hasNext: false };
 };
 
 /**
@@ -159,9 +155,7 @@ export const pullPageFromWire = (page: WirePullPage): PrimarySyncPullPage => {
 export const pullPageToWire = (page: PrimarySyncPullPage): WirePullPage => {
   const data = page.data.map(eventToWire);
 
-  return page.hasNext
-    ? { data, hasNext: true, cursor: page.cursor }
-    : { data, hasNext: false };
+  return page.hasNext ? { data, hasNext: true, cursor: page.cursor } : { data, hasNext: false };
 };
 
 /**
@@ -190,18 +184,14 @@ export const pushResultToWire = (
  * @since 0.0.0
  * @category encoding
  */
-export const eventResponseFromWire = (
-  response: WireEventResponse,
-): Option.Option<EventInstance> =>
+export const eventResponseFromWire = (response: WireEventResponse): Option.Option<EventInstance> =>
   response.event === null ? Option.none() : Option.some(eventFromWire(response.event));
 
 /**
  * @since 0.0.0
  * @category encoding
  */
-export const eventResponseToWire = (
-  event: Option.Option<EventInstance>,
-): WireEventResponse => ({
+export const eventResponseToWire = (event: Option.Option<EventInstance>): WireEventResponse => ({
   event: Option.match(event, {
     onNone: () => null,
     onSome: eventToWire,
@@ -236,10 +226,31 @@ const getEventPrimary = (eventId: string) =>
     return yield* primary.getEvent(eventId);
   });
 
+const projectionRowsPrimary = (projectionKey: string, eventId: EventId.EventId) =>
+  Effect.gen(function* () {
+    const projections = yield* PrimaryProjectionRouter;
+    const projection = projections.find(projectionKey);
+
+    return projection
+      ? Option.some(
+          projection.bootstrap({ eventId }).pipe(
+            Stream.mapEffect((row) =>
+              Schema.encodeUnknownEffect(projection.rowSchema)(row).pipe(
+                Effect.map((encoded) => `${JSON.stringify(encoded)}\n`),
+              ),
+            ),
+            Stream.encodeText,
+          ) as Stream.Stream<Uint8Array, unknown, never>,
+        )
+      : Option.none<Stream.Stream<Uint8Array, unknown>>();
+  });
+
 const json = (body: unknown, status?: number) =>
   HttpServerResponse.jsonUnsafe(body, status ? { status } : undefined);
 
 const badRequest = (message: string) => json({ message }, 400);
+
+const notFound = (message: string) => json({ message }, 404);
 
 /**
  * @since 0.0.0
@@ -256,67 +267,83 @@ export interface RoutesLayerOptions {
 export const routesLayer = (options?: RoutesLayerOptions) =>
   HttpRouter.addAll(
     [
-      HttpRouter.route(
-        "GET",
-        "/pull",
-        (request) =>
-          Effect.gen(function* () {
-            const url = new URL(request.originalUrl, "http://localhost");
-            const cursor = url.searchParams.get("cursor") ?? undefined;
-            const page = yield* pullPrimary(cursor);
+      HttpRouter.route("GET", "/pull", (request) =>
+        Effect.gen(function* () {
+          const url = new URL(request.originalUrl, "http://localhost");
+          const cursor = url.searchParams.get("cursor") ?? undefined;
+          const page = yield* pullPrimary(cursor);
 
-            return json(pullPageToWire(page));
-          }),
+          return json(pullPageToWire(page));
+        }),
       ),
 
-      HttpRouter.route(
-        "POST",
-        "/push",
-        (request) =>
-          Effect.gen(function* () {
-            const body = yield* HttpServerRequest.schemaBodyJson(WirePushBody).pipe(
-              Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-              Effect.catch(() => Effect.succeed(null)),
-            );
-            if (!body) {
-              return badRequest("Expected { events: WireEvent[] }");
-            }
+      HttpRouter.route("POST", "/push", (request) =>
+        Effect.gen(function* () {
+          const body = yield* HttpServerRequest.schemaBodyJson(WirePushBody).pipe(
+            Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+            Effect.catch(() => Effect.succeed(null)),
+          );
+          if (!body) {
+            return badRequest("Expected { events: WireEvent[] }");
+          }
 
-            const events = body.events.map(eventFromWire);
-            const results = yield* pushPrimary(events);
+          const events = body.events.map(eventFromWire);
+          const results = yield* pushPrimary(events);
 
-            return json({
-              results: results.map(pushResultToWire),
-            });
-          }),
+          return json({
+            results: results.map(pushResultToWire),
+          });
+        }),
       ),
 
-      HttpRouter.route(
-        "GET",
-        "/events/latest",
-        () =>
-          Effect.gen(function* () {
-            const event = yield* getLatestEventPrimary();
+      HttpRouter.route("GET", "/events/latest", () =>
+        Effect.gen(function* () {
+          const event = yield* getLatestEventPrimary();
 
-            return json(eventResponseToWire(event));
-          }),
+          return json(eventResponseToWire(event));
+        }),
       ),
 
-      HttpRouter.route(
-        "GET",
-        "/events/:eventId",
-        () =>
-          Effect.gen(function* () {
-            const params = yield* HttpRouter.params;
-            const eventId = params.eventId;
-            if (!eventId) {
-              return badRequest("Expected eventId path parameter");
-            }
+      HttpRouter.route("GET", "/events/:eventId", () =>
+        Effect.gen(function* () {
+          const params = yield* HttpRouter.params;
+          const eventId = params.eventId;
+          if (!eventId) {
+            return badRequest("Expected eventId path parameter");
+          }
 
-            const event = yield* getEventPrimary(eventId);
+          const event = yield* getEventPrimary(eventId);
 
-            return json(eventResponseToWire(event));
-          }),
+          return json(eventResponseToWire(event));
+        }),
+      ),
+
+      HttpRouter.route("GET", "/projection/:projection", (request) =>
+        Effect.gen(function* () {
+          const params = yield* HttpRouter.params;
+          const projectionKey = params.projection;
+          if (!projectionKey) {
+            return badRequest("Expected projection path parameter");
+          }
+
+          const url = new URL(request.originalUrl, "http://localhost");
+          const eventIdParam = url.searchParams.get("eventId");
+          if (!eventIdParam) {
+            return badRequest("Expected eventId query parameter");
+          }
+
+          const rows = yield* projectionRowsPrimary(
+            projectionKey,
+            Schema.decodeUnknownSync(EventId.EventId)(eventIdParam),
+          );
+          if (Option.isNone(rows)) {
+            return notFound(`Unknown projection ${projectionKey}`);
+          }
+
+          return HttpServerResponse.stream(rows.value, {
+            contentType: "application/x-ndjson",
+          });
+        }),
       ),
     ] as const,
     options?.prefix ? { prefix: options.prefix } : undefined,

@@ -116,3 +116,14 @@ export function layer<const TProjections extends ReadonlyArray<AnyPrimaryProject
     }),
   );
 }
+
+/**
+ * @since 0.0.0
+ * @category layer
+ */
+export const emptyLayer: Layer.Layer<PrimaryProjectionRouter> = Layer.succeed(
+  PrimaryProjectionRouter,
+  PrimaryProjectionRouter.of({
+    find: () => undefined,
+  }),
+);
