@@ -4,6 +4,7 @@ import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import {
   Event,
+  EventId,
   EventHandler,
   EventInstance,
   EventRouter,
@@ -496,5 +497,86 @@ layer(PrimarySyncEngineLayer)((it) => {
         count: "3",
       });
     }).pipe(Effect.ensuring(Effect.promise(() => server.dispose())));
+  });
+
+  it.effect("consumes primary projection rows over HTTP", () => {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineWithProjectionLayer, {
+      prefix: "/sync",
+      disableLogger: true,
+    });
+    const fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      server.handler(
+        new Request(input instanceof Request ? input.url : String(input), init),
+      )) as typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const router = yield* PrimaryProjection.PrimaryProjectionRouter;
+      const projection = router.find("todos");
+      if (!projection) {
+        assert.fail("expected todos projection to be registered");
+      }
+
+      const rows = yield* projection
+        .bootstrap({ eventId: Schema.decodeUnknownSync(EventId.EventId)("event-1") })
+        .pipe(Stream.runCollect);
+
+      assert.deepStrictEqual(Array.from(rows), [
+        { id: "todo-1", name: "Buy coffee" },
+        { id: "todo-2", name: "Read docs" },
+      ]);
+    }).pipe(
+      Effect.provide(
+        HttpPrimarySyncEngine.projectionLayer({
+          baseUrl: "http://test/sync",
+          fetch,
+          projections: [
+            {
+              key: "todos",
+              rowSchema: TodoProjectionRow,
+            },
+          ],
+        }),
+      ),
+      Effect.ensuring(Effect.promise(() => server.dispose())),
+    );
+  });
+
+  it.effect("decodes HTTP primary projection rows with their schema", () => {
+    const server = HttpPrimarySyncEngine.makeWebHandler(PrimarySyncEngineWithProjectionLayer, {
+      prefix: "/sync",
+      disableLogger: true,
+    });
+    const fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      server.handler(
+        new Request(input instanceof Request ? input.url : String(input), init),
+      )) as typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const router = yield* PrimaryProjection.PrimaryProjectionRouter;
+      const projection = router.find("encoded");
+      if (!projection) {
+        assert.fail("expected encoded projection to be registered");
+      }
+
+      const rows = yield* projection
+        .bootstrap({ eventId: Schema.decodeUnknownSync(EventId.EventId)("event-1") })
+        .pipe(Stream.runCollect);
+
+      assert.deepStrictEqual(Array.from(rows), [{ id: "encoded-1", count: 3 }]);
+    }).pipe(
+      Effect.provide(
+        HttpPrimarySyncEngine.projectionLayer({
+          baseUrl: "http://test/sync",
+          fetch,
+          projections: [
+            {
+              key: "encoded",
+              rowSchema: EncodedProjectionRow,
+            },
+          ],
+        }),
+      ),
+      Effect.ensuring(Effect.promise(() => server.dispose())),
+    );
   });
 });

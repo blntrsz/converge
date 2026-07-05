@@ -2,7 +2,11 @@ import { Effect, Layer, Option, Result, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import * as EventId from "../../event/event-id.ts";
 import { EventInstance } from "../../event/event-instance.ts";
-import { PrimaryProjectionRouter } from "../services/primary-projection.ts";
+import {
+  layer as primaryProjectionRouterLayer,
+  PrimaryProjectionRouter,
+  type PrimaryProjectionConfig,
+} from "../services/primary-projection.ts";
 import { PrimarySyncEngine, type IPrimarySyncEngine } from "../services/primary-sync-engine.ts";
 
 /**
@@ -385,7 +389,12 @@ export interface LayerOptions {
 
 const endpointUrl = (
   baseUrl: string | URL,
-  endpoint: "/pull" | "/push" | "/events/latest" | `/events/${string}`,
+  endpoint:
+    | "/pull"
+    | "/push"
+    | "/events/latest"
+    | `/events/${string}`
+    | `/projection/${string}`,
   search?: Record<string, string>,
 ) => {
   const url = `${baseUrl}`.replace(/\/+$/, "") + endpoint;
@@ -495,4 +504,91 @@ export const layer = (options: LayerOptions): Layer.Layer<PrimarySyncEngine> => 
       getEvent,
     }),
   );
+};
+
+/**
+ * @since 0.0.0
+ * @category options
+ */
+export interface ProjectionClientConfig<TKey extends string = string, TRow = unknown> {
+  readonly key: TKey;
+  readonly rowSchema: Schema.Codec<TRow, unknown, never, unknown>;
+}
+
+/**
+ * @since 0.0.0
+ * @category options
+ */
+export interface ProjectionLayerOptions<
+  TProjections extends ReadonlyArray<ProjectionClientConfig<string, any>>,
+> extends LayerOptions {
+  readonly projections: TProjections;
+}
+
+const projectionStream = <TRow>(
+  options: LayerOptions,
+  projection: ProjectionClientConfig<string, TRow>,
+  eventId: EventId.EventId,
+) => {
+  const fetch = options.fetch ?? globalThis.fetch;
+
+  return Stream.unwrap(
+    Effect.tryPromise({
+      async try() {
+        const response = await fetch(
+          endpointUrl(
+            options.baseUrl,
+            `/projection/${encodeURIComponent(projection.key)}`,
+            { eventId },
+          ),
+        );
+        if (!response.ok) {
+          throw new Error(`Projection ${projection.key} failed with ${response.status}`);
+        }
+        if (!response.body) {
+          throw new Error(`Projection ${projection.key} response had no body`);
+        }
+
+        return response.body;
+      },
+      catch: (error) => error,
+    }).pipe(
+      Effect.map((body) =>
+        Stream.fromReadableStream({
+          evaluate: () => body,
+          onError: (error) => error,
+        }).pipe(
+          Stream.decodeText(),
+          Stream.splitLines,
+          Stream.filter((line) => line.length > 0),
+          Stream.mapEffect((line) =>
+            Effect.try({
+              try: () => Schema.decodeUnknownSync(projection.rowSchema)(JSON.parse(line)),
+              catch: (error) => error,
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+};
+
+/**
+ * @since 0.0.0
+ * @category layer
+ */
+export const projectionLayer = <
+  const TProjections extends ReadonlyArray<ProjectionClientConfig<string, any>>,
+>(
+  options: ProjectionLayerOptions<TProjections>,
+): Layer.Layer<PrimaryProjectionRouter> => {
+  const projections = options.projections.map(
+    (projection): PrimaryProjectionConfig<string, any, unknown, never> => ({
+      key: projection.key,
+      rowSchema: projection.rowSchema,
+      bootstrap: ({ eventId }) => projectionStream(options, projection, eventId),
+    }),
+  );
+
+  return primaryProjectionRouterLayer({ projections });
 };
