@@ -506,4 +506,45 @@ layer(ReplicaSyncEngineWithBootstrapLayer)((it) => {
       ),
     30000,
   );
+
+  it.effect(
+    "checkout bootstraps registered projections at the requested eventId",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+          const projection = yield* BootstrapTodoProjection;
+          yield* projection.bootstrap(Stream.empty);
+
+          const firstEvent = yield* EventInstance.make(todoCreated, {
+            id: "checkout-1",
+            name: "Older todo",
+          });
+          const secondEvent = yield* EventInstance.make(todoCreated, {
+            id: "checkout-2",
+            name: "Newer todo",
+          });
+
+          yield* primary.push(firstEvent, secondEvent);
+
+          yield* replica.checkout(firstEvent.eventId);
+
+          assert.deepStrictEqual(yield* replica.mode, {
+            _tag: "Checkout",
+            eventId: firstEvent.eventId,
+          });
+          const bootstrapped = yield* projection.query((todos) => todos);
+          assert.deepStrictEqual(bootstrapped, [
+            {
+              id: "bootstrapped-head",
+              name: firstEvent.eventId,
+            },
+          ]);
+          assert.strictEqual(acceptedHandlerRuns, 0);
+        }),
+      ),
+    30000,
+  );
 });

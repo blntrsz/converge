@@ -348,7 +348,46 @@ export const layer: Layer.Layer<
         }),
       );
 
-    const bootstrapReplicaProjections = Effect.gen(function* () {
+    const replaceAcceptedEventsWith = (event: EventInstance) =>
+      acceptLock.withPermits(1)(
+        Effect.gen(function* () {
+          yield* eventHistory.clear.pipe(Effect.asVoid, Effect.orDie);
+          yield* appendAcceptedEvent(event);
+        }),
+      );
+
+    const bootstrapReplicaProjectionsAt = (
+      event: EventInstance,
+      options: {
+        readonly replaceSyncPosition: boolean;
+      },
+    ) =>
+      Effect.gen(function* () {
+        if (projections.all.length === 0) return;
+
+        const eventId = Schema.decodeUnknownSync(EventId)(event.eventId);
+        for (const projection of projections.all) {
+          const primaryProjection = primaryProjections.find(projection.key);
+          if (!primaryProjection) {
+            return yield* Effect.die(
+              new Error(`Missing primary projection for ${projection.key}`),
+            );
+          }
+
+          const rows = primaryProjection.bootstrap({ eventId }).pipe(
+            Stream.mapError((error) => error as unknown),
+          );
+          yield* projection.bootstrap(rows);
+        }
+
+        if (options.replaceSyncPosition) {
+          yield* replaceAcceptedEventsWith(event);
+        } else {
+          yield* seedAcceptedEvent(event);
+        }
+      });
+
+    const bootstrapReplicaProjectionsAtHead = Effect.gen(function* () {
       if (projections.all.length === 0) return;
 
       const cursorOption = yield* lastEventId();
@@ -357,26 +396,13 @@ export const layer: Layer.Layer<
       const latestEvent = yield* primary.getLatestEvent();
       if (Option.isNone(latestEvent)) return;
 
-      const eventId = Schema.decodeUnknownSync(EventId)(latestEvent.value.eventId);
-      for (const projection of projections.all) {
-        const primaryProjection = primaryProjections.find(projection.key);
-        if (!primaryProjection) {
-          return yield* Effect.die(
-            new Error(`Missing primary projection for ${projection.key}`),
-          );
-        }
-
-        const rows = primaryProjection.bootstrap({ eventId }).pipe(
-          Stream.mapError((error) => error as unknown),
-        );
-        yield* projection.bootstrap(rows);
-      }
-
-      yield* seedAcceptedEvent(latestEvent.value);
+      yield* bootstrapReplicaProjectionsAt(latestEvent.value, {
+        replaceSyncPosition: false,
+      });
     });
 
     const pullRemoteEvents = Effect.gen(function* () {
-      yield* bootstrapReplicaProjections;
+      yield* bootstrapReplicaProjectionsAtHead;
       let cursorOption = yield* lastEventId();
       while (true) {
         const page = yield* primary.pull(Option.getOrUndefined(cursorOption));
@@ -468,6 +494,19 @@ export const layer: Layer.Layer<
      */
     const checkout: IReplicaSyncEngine["checkout"] = Effect.fn("ReplicaSyncEngine.checkout")(
       function* (eventId) {
+        if (projections.all.length > 0) {
+          const event = yield* primary.getEvent(eventId);
+          if (Option.isNone(event)) {
+            return yield* Effect.die(
+              new Error(`Cannot checkout unknown eventId ${eventId}`),
+            );
+          }
+
+          yield* bootstrapReplicaProjectionsAt(event.value, {
+            replaceSyncPosition: true,
+          }).pipe(Effect.orDie);
+        }
+
         yield* Ref.set(syncMode, { _tag: "Checkout", eventId });
       },
     );
