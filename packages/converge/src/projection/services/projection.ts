@@ -1,7 +1,6 @@
-import { Effect, Layer, Option, Schema, Semaphore, Stream } from "effect";
+import { Context, Effect, HashMap, Layer, Option, Schema, Semaphore, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AtomRef from "effect/unstable/reactivity/AtomRef";
-import type { Context } from "effect";
 
 /**
  * @since 0.0.0
@@ -76,6 +75,61 @@ export interface IReactiveProjection<TSnapshot, TError = never, TBootstrapRow = 
   extends IProjection<TSnapshot, TError, TBootstrapRow> {
   readonly atom: Atom.Atom<TSnapshot>;
 }
+
+/**
+ * @since 0.0.0
+ * @category model
+ */
+export interface ProjectionRegistration<
+  TKey extends string = string,
+  TProjection extends Context.Service.Any = Context.Service.Any,
+> {
+  readonly key: TKey;
+  readonly projection: TProjection;
+}
+
+/**
+ * @since 0.0.0
+ * @category type
+ */
+export type AnyProjectionRegistration = ProjectionRegistration<string, Context.Service.Any>;
+
+/**
+ * @since 0.0.0
+ * @category type
+ */
+export type ProjectionRegistrationContext<TRegistration> =
+  TRegistration extends ProjectionRegistration<any, infer TProjection>
+    ? Context.Service.Identifier<TProjection>
+    : never;
+
+/**
+ * @since 0.0.0
+ * @category service-interface
+ */
+export interface RoutedProjection<TKey extends string = string, TRow = unknown> {
+  readonly key: TKey;
+  readonly bootstrap: (
+    rows: Stream.Stream<TRow, unknown, never>,
+  ) => Effect.Effect<void, unknown>;
+}
+
+/**
+ * @since 0.0.0
+ * @category service-interface
+ */
+export interface IProjectionRouter {
+  readonly find: (key: string) => RoutedProjection | undefined;
+  readonly all: ReadonlyArray<RoutedProjection>;
+}
+
+/**
+ * @since 0.0.0
+ * @category service
+ */
+export class ProjectionRouter extends Context.Service<ProjectionRouter, IProjectionRouter>()(
+  "ProjectionRouter",
+) {}
 
 /**
  * @since 0.0.0
@@ -283,4 +337,47 @@ export function layer<
   },
 ): Layer.Layer<TIdentifier, StorageError<TStorage>> {
   return Layer.effect(tag, make(options));
+}
+
+const routeProjection = <const TRegistration extends AnyProjectionRegistration>(
+  registration: TRegistration,
+  context: Context.Context<ProjectionRegistrationContext<TRegistration>>,
+): RoutedProjection => {
+  const projection = Context.get(context, registration.projection) as IProjection<any, unknown, any>;
+
+  return {
+    key: registration.key,
+    bootstrap: (rows) => projection.bootstrap(rows),
+  };
+};
+
+/**
+ * @since 0.0.0
+ * @category layer
+ */
+export function routerLayer<
+  const TRegistrations extends ReadonlyArray<AnyProjectionRegistration>,
+>(input: {
+  readonly projections: TRegistrations;
+}): Layer.Layer<ProjectionRouter, never, ProjectionRegistrationContext<TRegistrations[number]>> {
+  return Layer.effect(
+    ProjectionRouter,
+    Effect.gen(function* () {
+      const context = yield* Effect.context<ProjectionRegistrationContext<TRegistrations[number]>>();
+      const projections = input.projections.map((projection) =>
+        routeProjection(
+          projection,
+          context as Context.Context<ProjectionRegistrationContext<typeof projection>>,
+        ),
+      );
+      const projectionsByKey = HashMap.fromIterable(
+        projections.map((projection) => [projection.key, projection] as const),
+      );
+
+      return ProjectionRouter.of({
+        all: projections,
+        find: (key) => Option.getOrUndefined(HashMap.get(projectionsByKey, key)),
+      });
+    }),
+  );
 }

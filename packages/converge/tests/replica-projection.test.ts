@@ -43,6 +43,15 @@ const TodoProjectionLayer = MemoryProjection.memoryLayer(TodoProjection, {
 
 const TestLayer = Layer.mergeAll(PrimaryProjectionLayer, TodoProjectionLayer);
 
+const ProjectionRouterLayer = Projection.routerLayer({
+  projections: [
+    {
+      key: "todos",
+      projection: TodoProjection,
+    },
+  ],
+}).pipe(Layer.provideMerge(TodoProjectionLayer));
+
 layer(TestLayer)((it) => {
   it.effect("bootstraps replica projections from primary projection rows", () =>
     Effect.gen(function* () {
@@ -62,6 +71,25 @@ layer(TestLayer)((it) => {
       const snapshot = yield* projection.query((todos) => todos);
 
       assert.deepStrictEqual(snapshot, [{ id: "todo-2", title: "Second" }]);
+    }),
+  );
+});
+
+layer(ProjectionRouterLayer)((it) => {
+  it.effect("registers bootstrappable projections by key", () =>
+    Effect.gen(function* () {
+      const router = yield* Projection.ProjectionRouter;
+      const projection = router.find("todos");
+      if (!projection) {
+        assert.fail("expected todos projection to be registered");
+      }
+
+      yield* projection.bootstrap(Stream.make({ id: "todo-3", title: "Third" }));
+
+      const todos = yield* (yield* TodoProjection).query((todos) => todos);
+
+      assert.deepStrictEqual(todos, [{ id: "todo-3", title: "Third" }]);
+      assert.strictEqual(router.find("missing"), undefined);
     }),
   );
 });
