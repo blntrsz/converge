@@ -12,6 +12,7 @@ import {
   EventRouter,
   IndexedDbReplicaSyncEngine,
   MemoryReplicaProjection,
+  PostgresEventLog,
   PostgresPrimarySyncEngine,
   PrimaryProjection,
   PrimarySyncEngine,
@@ -100,7 +101,7 @@ const primaryMigrationsLayer = Layer.effectDiscard(
   Migrator.make({})({ loader: primaryMigrations }),
 );
 
-const PgSqlClientWithMigrations = PostgresPrimarySyncEngine.migrationsLayer.pipe(
+const PgSqlClientWithMigrations = PostgresEventLog.migrationsLayer.pipe(
   Layer.provideMerge(PgliteSqlClient),
 );
 
@@ -118,6 +119,7 @@ const ReplicaEventRouterLayer = EventRouter.layer({
 
 const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provideMerge(PrimaryEventRouterLayer),
+  Layer.provideMerge(PostgresEventLog.layer),
   Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 

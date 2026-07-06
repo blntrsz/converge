@@ -9,6 +9,7 @@ import {
   EventInstance,
   EventRouter,
   HttpPrimarySyncEngine,
+  PostgresEventLog,
   PostgresPrimarySyncEngine,
   PrimaryProjection,
   PrimarySyncEngine,
@@ -98,7 +99,7 @@ const migrations = Migrator.fromRecord({
 
 const migrationsLayer = Layer.effectDiscard(Migrator.make({})({ loader: migrations }));
 
-const PgSqlClientWithMigrations = PostgresPrimarySyncEngine.migrationsLayer.pipe(
+const PgSqlClientWithMigrations = PostgresEventLog.migrationsLayer.pipe(
   Layer.provideMerge(PgliteSqlClient),
 );
 
@@ -112,11 +113,13 @@ const EventRouterLayer = EventRouter.layer({
 
 const PrimarySyncEngineLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provideMerge(EventRouterLayer),
+  Layer.provideMerge(PostgresEventLog.layer),
   Layer.provideMerge(PgSqlClientWithAllMigrations),
 );
 
 const PrimarySyncEngineOnlyLayer = PostgresPrimarySyncEngine.layer.pipe(
   Layer.provide(EventRouterLayer),
+  Layer.provide(PostgresEventLog.layer),
   Layer.provide(PgSqlClientWithAllMigrations),
 );
 

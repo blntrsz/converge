@@ -1,8 +1,8 @@
-import { Array, Effect, Layer, Option, Result, Schema } from "effect";
-import { SqlClient, SqlSchema } from "effect/unstable/sql";
-import * as Migrator from "effect/unstable/sql/Migrator";
+import { Effect, Layer, Option, Result, Schema } from "effect";
+import { SqlClient } from "effect/unstable/sql";
 import { EventInstance } from "../../event/event-instance.ts";
 import { EventRouterService } from "../../event/event-router.ts";
+import { EventLog } from "../../event/services/event-log.ts";
 import { PrimarySyncEngine, type IPrimarySyncEngine } from "../services/primary-sync-engine.ts";
 
 const PullPageSize = 100;
@@ -13,115 +13,18 @@ class EventRejected {
 
 /**
  * @since 0.0.0
- * @category migrations
- */
-export const migrations = Migrator.fromRecord({
-  "1_create_event_history": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-
-    yield* sql`
-      CREATE TABLE IF NOT EXISTS event_history (
-        id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-        event_id text NOT NULL UNIQUE,
-        event_type text NOT NULL,
-        event_details jsonb NOT NULL,
-        created_at timestamp with time zone NOT NULL DEFAULT now()
-      )
-    `;
-  }),
-});
-
-/**
- * @since 0.0.0
- * @category layer
- */
-export const migrationsLayer = Layer.effectDiscard(Migrator.make({})({ loader: migrations }));
-
-/**
- * @since 0.0.0
  * @category layer
  */
 export const layer: Layer.Layer<
   PrimarySyncEngine,
   never,
-  SqlClient.SqlClient | EventRouterService
+  EventLog | EventRouterService | SqlClient.SqlClient
 > = Layer.effect(
   PrimarySyncEngine,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const eventLog = yield* EventLog;
     const eventRouter = yield* EventRouterService;
-
-    const pullEvents = SqlSchema.findAll({
-      Request: Schema.Struct({
-        limit: Schema.Number,
-        cursor: Schema.String.pipe(Schema.optional),
-      }),
-      Result: EventInstance,
-      execute: (input) =>
-        input.cursor
-          ? sql`
-            SELECT
-              event_id,
-              event_type,
-              event_details
-            FROM event_history
-            WHERE id > COALESCE(
-              (SELECT id FROM event_history WHERE event_id = ${input.cursor}),
-              0
-            )
-            ORDER BY id ASC
-            LIMIT ${input.limit}
-          `
-          : sql`
-            SELECT
-              event_id,
-              event_type,
-              event_details
-            FROM event_history
-            ORDER BY id ASC
-            LIMIT ${input.limit}
-          `,
-    });
-
-    const getLatestEventQuery = SqlSchema.findAll({
-      Request: Schema.Struct({}),
-      Result: EventInstance,
-      execute: () => sql`
-        SELECT
-          event_id,
-          event_type,
-          event_details
-        FROM event_history
-        ORDER BY id DESC
-        LIMIT 1
-      `,
-    });
-
-    const getEventQuery = SqlSchema.findAll({
-      Request: Schema.Struct({
-        eventId: Schema.String,
-      }),
-      Result: EventInstance,
-      execute: (input) => sql`
-        SELECT
-          event_id,
-          event_type,
-          event_details
-        FROM event_history
-        WHERE event_id = ${input.eventId}
-      `,
-    });
-
-    const insertEvent = (event: EventInstance) =>
-      sql<{ event_id: string }>`
-        INSERT INTO event_history ${sql.insert({
-          eventId: event.eventId,
-          eventType: event.eventType,
-          eventDetails: event.eventDetails,
-        })}
-        ON CONFLICT (event_id) DO NOTHING
-        RETURNING event_id
-      `;
 
     /**
      * @since 0.0.0
@@ -129,23 +32,21 @@ export const layer: Layer.Layer<
      */
     const pull: IPrimarySyncEngine["pull"] = Effect.fn("PrimarySyncEngine.pull")(
       function* (cursor) {
-        const rows = yield* pullEvents({
-          limit: PullPageSize + 1,
+        const page = yield* eventLog.scan({
+          limit: PullPageSize,
           cursor,
-        }).pipe(Effect.orDie);
-        const data = Array.take(rows, PullPageSize);
-        const cursorOption = Array.last(data).pipe(Option.map((event) => event.eventId));
+        });
 
-        if (rows.length > PullPageSize && Option.isSome(cursorOption)) {
+        if (Option.isSome(page.nextCursor)) {
           return {
-            data,
+            data: Array.from(page.events),
             hasNext: true,
-            cursor: cursorOption.value,
+            cursor: page.nextCursor.value,
           };
         }
 
         return {
-          data,
+          data: Array.from(page.events),
           hasNext: false,
         };
       },
@@ -183,8 +84,8 @@ export const layer: Layer.Layer<
                 });
 
                 const acceptEvent = Effect.gen(function* () {
-                  const insertedRows = yield* insertEvent(acceptedEvent);
-                  if (insertedRows.length === 0) {
+                  const appendResult = yield* eventLog.append(acceptedEvent);
+                  if (!appendResult.inserted) {
                     return acceptedEvent;
                   }
 
@@ -221,22 +122,14 @@ export const layer: Layer.Layer<
      */
     const getLatestEvent: IPrimarySyncEngine["getLatestEvent"] = Effect.fn(
       "PrimarySyncEngine.getLatestEvent",
-    )(function* () {
-      const rows = yield* getLatestEventQuery({}).pipe(Effect.orDie);
-
-      return Array.head(rows);
-    });
+    )(() => eventLog.getLatestEvent());
 
     /**
      * @since 0.0.0
      * @category service-method
      */
     const getEvent: IPrimarySyncEngine["getEvent"] = Effect.fn("PrimarySyncEngine.getEvent")(
-      function* (eventId) {
-        const rows = yield* getEventQuery({ eventId }).pipe(Effect.orDie);
-
-        return Array.head(rows);
-      },
+      (eventId) => eventLog.getEvent(eventId),
     );
 
     return PrimarySyncEngine.of({

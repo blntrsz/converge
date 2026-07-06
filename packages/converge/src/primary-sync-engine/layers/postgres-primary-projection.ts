@@ -1,5 +1,6 @@
-import { Effect, Schema, Stream } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
 import { SqlClient, SqlError } from "effect/unstable/sql";
+import { EventLog } from "../../event/services/event-log.ts";
 import type { PrimaryProjectionConfig } from "../../projection/services/primary-projection.ts";
 
 type NonEmptyReadonlyArray<T> = readonly [T, ...T[]];
@@ -23,12 +24,20 @@ export interface VersionedTableOptions<TKey extends string, TRow extends object>
  */
 export const versionedTable = <const TKey extends string, TRow extends object>(
   options: VersionedTableOptions<TKey, TRow>,
-): PrimaryProjectionConfig<TKey, TRow, SqlError.SqlError, SqlClient.SqlClient> => ({
+): PrimaryProjectionConfig<TKey, TRow, SqlError.SqlError, SqlClient.SqlClient | EventLog> => ({
   key: options.key,
   rowSchema: options.rowSchema,
   bootstrap: ({ eventId }) =>
     Stream.unwrap(
-      Effect.map(SqlClient.SqlClient, (sql) => {
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const eventLog = yield* EventLog;
+        const eventHistoryId = yield* eventLog.resolveEventHistoryId(eventId);
+
+        if (Option.isNone(eventHistoryId)) {
+          return Stream.empty;
+        }
+
         const idColumns = options.idColumns ?? (["id"] as const);
         const sinceColumn = options.sinceColumn ?? "since";
         const identifier = (column: string) => sql`${sql(column)}`;
@@ -40,9 +49,7 @@ export const versionedTable = <const TKey extends string, TRow extends object>(
           SELECT DISTINCT ON (${distinctColumns})
             ${selectedColumns}
           FROM ${sql(options.tableName)}
-          WHERE ${sql(sinceColumn)} <= (
-            SELECT id FROM event_history WHERE event_id = ${eventId}
-          )
+          WHERE ${sql(sinceColumn)} <= CAST(${eventHistoryId.value} AS bigint)
           ORDER BY ${orderColumns}
         `.stream;
       }),

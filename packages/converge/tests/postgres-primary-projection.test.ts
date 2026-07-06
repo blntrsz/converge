@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import {
@@ -7,7 +7,9 @@ import {
   EventId,
   EventHandler,
   EventInstance,
+  EventLog,
   EventRouter,
+  PostgresEventLog,
   PostgresPrimaryProjection,
   PostgresPrimarySyncEngine,
   PrimaryProjection,
@@ -39,7 +41,7 @@ const migrations = Migrator.fromRecord({
       CREATE TABLE IF NOT EXISTS primary_todo_projection (
         id text NOT NULL,
         name text NOT NULL,
-        since bigint NOT NULL REFERENCES event_history(id),
+        since bigint NOT NULL,
         PRIMARY KEY (id, since)
       )
     `;
@@ -49,9 +51,7 @@ const migrations = Migrator.fromRecord({
 const migrationsLayer = Layer.effectDiscard(Migrator.make({})({ loader: migrations }));
 
 const PgSqlClientWithMigrations = migrationsLayer.pipe(
-  Layer.provideMerge(
-    PostgresPrimarySyncEngine.migrationsLayer.pipe(Layer.provideMerge(PgliteSqlClient)),
-  ),
+  Layer.provideMerge(PostgresEventLog.migrationsLayer.pipe(Layer.provideMerge(PgliteSqlClient))),
 );
 
 const EventRouterLayer = EventRouter.layer({
@@ -74,6 +74,7 @@ const TodoPrimaryProjectionLayer = PrimaryProjection.layer({
 });
 
 const TestLayer = Layer.mergeAll(PrimarySyncEngineLayer, TodoPrimaryProjectionLayer).pipe(
+  Layer.provideMerge(PostgresEventLog.layer),
   Layer.provideMerge(PgSqlClientWithMigrations),
 );
 
@@ -81,6 +82,7 @@ layer(TestLayer)((it) => {
   it.effect("bootstraps a versioned table at the requested eventId", () =>
     Effect.gen(function* () {
       const engine = yield* PrimarySyncEngine.PrimarySyncEngine;
+      const eventLog = yield* EventLog.EventLog;
       const router = yield* PrimaryProjection.PrimaryProjectionRouter;
       const sql = yield* SqlClient.SqlClient;
 
@@ -96,12 +98,24 @@ layer(TestLayer)((it) => {
 
       yield* engine.push(firstEvent, secondEvent, thirdEvent);
 
+      const firstEventHistoryId = yield* eventLog.resolveEventHistoryId(firstEvent.eventId);
+      const secondEventHistoryId = yield* eventLog.resolveEventHistoryId(secondEvent.eventId);
+      const thirdEventHistoryId = yield* eventLog.resolveEventHistoryId(thirdEvent.eventId);
+
+      if (
+        Option.isNone(firstEventHistoryId) ||
+        Option.isNone(secondEventHistoryId) ||
+        Option.isNone(thirdEventHistoryId)
+      ) {
+        assert.fail("expected pushed Events to resolve to Event history ids");
+      }
+
       yield* sql`
         INSERT INTO primary_todo_projection (id, name, since)
         VALUES
-          ('todo-1', 'Draft', (SELECT id FROM event_history WHERE event_id = ${firstEvent.eventId})),
-          ('todo-1', 'Published', (SELECT id FROM event_history WHERE event_id = ${thirdEvent.eventId})),
-          ('todo-2', 'Between', (SELECT id FROM event_history WHERE event_id = ${secondEvent.eventId}))
+          ('todo-1', 'Draft', CAST(${firstEventHistoryId.value} AS bigint)),
+          ('todo-1', 'Published', CAST(${thirdEventHistoryId.value} AS bigint)),
+          ('todo-2', 'Between', CAST(${secondEventHistoryId.value} AS bigint))
       `;
 
       const projection = router.find("todos");
