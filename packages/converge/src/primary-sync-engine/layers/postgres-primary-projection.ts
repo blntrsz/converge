@@ -1,6 +1,6 @@
 import { Effect, Schema, Stream } from "effect";
 import { SqlClient, SqlError } from "effect/unstable/sql";
-import type { PrimaryProjectionConfig } from "../services/primary-projection.ts";
+import type { PrimaryProjectionConfig } from "../../projection/services/primary-projection.ts";
 
 type NonEmptyReadonlyArray<T> = readonly [T, ...T[]];
 
@@ -34,10 +34,7 @@ export const versionedTable = <const TKey extends string, TRow extends object>(
         const identifier = (column: string) => sql`${sql(column)}`;
         const distinctColumns = sql.csv(idColumns.map(identifier));
         const selectedColumns = sql.csv(options.columns.map(identifier));
-        const orderColumns = sql.csv([
-          ...idColumns.map(identifier),
-          sql`${sql(sinceColumn)} DESC`,
-        ]);
+        const orderColumns = sql.csv([...idColumns.map(identifier), sql`${sql(sinceColumn)} DESC`]);
 
         return sql<TRow>`
           SELECT DISTINCT ON (${distinctColumns})

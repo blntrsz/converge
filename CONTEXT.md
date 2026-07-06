@@ -24,8 +24,8 @@ _Avoid_: Event type, message schema
 One recorded occurrence of an Event, identified by a unique **eventId** (CUID2, client-generatable, stable across primary and replica) and carrying a specific payload.
 _Avoid_: Event record, message instance
 
-**Projection**:
-A read-only, queryable view of state derived from storage. EventHandlers write storage directly; the projection reflects that storage. Used to bootstrap a replica from a snapshot so the full event log need not be replayed. After bootstrap, the replica continues syncing from the pinned eventId onward.
+**Replica projection**:
+A read-only, queryable view of replica state derived from replica storage. EventHandlers write storage directly; the replica projection reflects that storage. Used to bootstrap a replica from a snapshot so the full event log need not be replayed. After bootstrap, the replica continues syncing from the pinned eventId onward.
 _Avoid_: Read model, cache, write model
 
 **Event history id**:
@@ -37,8 +37,8 @@ The eventId shared across all projections on a replica. Marks where incremental 
 _Avoid_: Per-projection cursor, eventHistoryId as wire id
 
 **Sync mode**:
-How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic overlay is disabled. Returning to Latest re-bootstraps all projections to head, re-seeds event_history at the sync position eventId, and resumes normal sync.
-_Avoid_: Live mode, replay mode, follow mode
+How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic overlay is disabled. Returning to Latest re-bootstraps all projections to head, re-seeds event*history at the sync position eventId, and resumes normal sync.
+\_Avoid*: Live mode, replay mode, follow mode
 
 **Primary storage**:
 Versioned record storage on the primary. Each handler accept appends a new row with a `since` sequence. Bootstrap reads are anchored queries over this history.
@@ -124,4 +124,4 @@ _Avoid_: Client handler, frontend handler
 Primary and replica handlers are separate implementations with different storage shapes (versioned vs flat), but the same event sequence must produce the same projection snapshot on both sides. Handlers must be idempotent — re-applying an event already reflected in storage is a no-op.
 _Avoid_: Shared handler, identical handler
 
-A replica hosts one or more projections. All projections share one replica event log and one sync position eventId.
+A replica hosts one or more replica projections. All replica projections share one replica event log and one sync position eventId.

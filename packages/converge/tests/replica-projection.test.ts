@@ -2,9 +2,9 @@ import { assert, layer } from "@effect/vitest";
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import {
   EventId,
-  MemoryProjection,
+  MemoryReplicaProjection,
   PrimaryProjection,
-  Projection,
+  ReplicaProjection,
 } from "../src/index.ts";
 
 const TodoRow = Schema.Struct({
@@ -16,7 +16,7 @@ type TodoRow = typeof TodoRow.Type;
 
 class TodoProjection extends Context.Service<
   TodoProjection,
-  Projection.IReactiveProjection<ReadonlyArray<TodoRow>, never, TodoRow>
+  ReplicaProjection.IReactiveReplicaProjection<ReadonlyArray<TodoRow>, never, TodoRow>
 >()("TodoProjection") {}
 
 const PrimaryProjectionLayer = PrimaryProjection.layer({
@@ -32,7 +32,7 @@ const PrimaryProjectionLayer = PrimaryProjection.layer({
   ],
 });
 
-const TodoProjectionLayer = MemoryProjection.memoryLayer(TodoProjection, {
+const TodoProjectionLayer = MemoryReplicaProjection.memoryLayer(TodoProjection, {
   initialValue: [] as ReadonlyArray<TodoRow>,
   bootstrap: (rows: Stream.Stream<TodoRow, unknown>) =>
     rows.pipe(
@@ -43,7 +43,7 @@ const TodoProjectionLayer = MemoryProjection.memoryLayer(TodoProjection, {
 
 const TestLayer = Layer.mergeAll(PrimaryProjectionLayer, TodoProjectionLayer);
 
-const ProjectionRouterLayer = Projection.routerLayer({
+const ReplicaProjectionRouterLayer = ReplicaProjection.routerLayer({
   projections: [
     {
       key: "todos",
@@ -75,10 +75,10 @@ layer(TestLayer)((it) => {
   );
 });
 
-layer(ProjectionRouterLayer)((it) => {
+layer(ReplicaProjectionRouterLayer)((it) => {
   it.effect("registers bootstrappable projections by key", () =>
     Effect.gen(function* () {
-      const router = yield* Projection.ProjectionRouter;
+      const router = yield* ReplicaProjection.ReplicaProjectionRouter;
       const projection = router.find("todos");
       if (!projection) {
         assert.fail("expected todos projection to be registered");

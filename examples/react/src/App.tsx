@@ -13,13 +13,19 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { createTodo, deleteTodo, setTodoCompleted, syncTodos } from "./todo-replica";
-import type { IReactiveProjection, ProjectionStorageError } from "converge/projection";
+import type {
+  IReactiveReplicaProjection,
+  ReplicaProjectionStorageError,
+} from "converge/projection";
 import type { Todo } from "./todo-events";
 
 export function App({
   todoProjection,
 }: {
-  readonly todoProjection: IReactiveProjection<ReadonlyArray<Todo>, ProjectionStorageError>;
+  readonly todoProjection: IReactiveReplicaProjection<
+    ReadonlyArray<Todo>,
+    ReplicaProjectionStorageError
+  >;
 }) {
   const todos = useAtomValue(todoProjection.atom);
   const [title, setTitle] = useState("");
@@ -173,7 +179,7 @@ export function App({
             </div>
           </CardContent>
           <CardFooter className="justify-between text-xs text-zinc-500">
-            <span>Projection persists via Converge + Effect Atom.</span>
+            <span>Replica projection persists via Converge + Effect Atom.</span>
             <span>Replica event log persists in IndexedDB.</span>
           </CardFooter>
         </Card>

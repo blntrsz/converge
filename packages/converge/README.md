@@ -14,36 +14,48 @@ bun run index.ts
 
 This project was created using `bun init` in bun v1.3.13. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
 
-## React projections
+## React replica projections
 
-Projection services expose `query` and `mutation` over typed snapshots. In replica handlers, the provided projection dependency makes `mutation` optimistic, accepted, or rejected based on the current replica apply phase.
+Replica projection services expose `query` over typed snapshots. Replica handlers write through a companion store; the provided store dependency makes `update` optimistic, accepted, or rejected based on the current replica apply phase.
 
 ```ts
 import { EventHandler } from "converge/event";
-import { IndexedDbProjection, Projection } from "converge/projection";
+import { IndexedDbReplicaProjection, ReplicaProjection } from "converge/projection";
 
 class TodoProjection extends Context.Service<
   TodoProjection,
-  Projection.IReactiveProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+  ReplicaProjection.IReactiveReplicaProjection<
+    ReadonlyArray<Todo>,
+    ReplicaProjection.ReplicaProjectionStorageError
+  >
 >()("TodoProjection") {}
+
+class TodoProjectionStore extends Context.Service<
+  TodoProjectionStore,
+  ReplicaProjection.IReplicaProjectionStore<
+    ReadonlyArray<Todo>,
+    ReplicaProjection.ReplicaProjectionStorageError
+  >
+>()("TodoProjectionStore") {}
 
 const todoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
-    const todos = yield* TodoProjection;
+    const todos = yield* TodoProjectionStore;
     const apply = (snapshot: ReadonlyArray<Todo>) =>
       [[...snapshot, event.eventDetails], undefined] as const;
 
-    yield* todos.mutation(apply);
+    yield* todos.update(apply);
   }),
 );
 
-const TodoProjectionLayer = IndexedDbProjection.indexedDbReplicaLayer(TodoProjection, {
+const TodoProjectionLayer = IndexedDbReplicaProjection.indexedDbReplicaLayer(TodoProjection, {
   databaseName: "todo-projections",
   key: "todos",
   schema: TodoListSchema,
   initialValue: [] as ReadonlyArray<Todo>,
+  store: TodoProjectionStore,
 });
 ```
 
-Use the handlers in `EventRouter.layer`, provide `ReplicaApplyContext.layer` to the replica sync engine, and provide the projection layer. Framework adapters can read the same projection service; React can subscribe directly with `useAtomValue(projection.atom)`.
+Use the handlers in `EventRouter.layer`, provide `ReplicaApplyContext.layer` to the replica sync engine, and provide the replica projection layer. Framework adapters can read the projection service; React can subscribe directly with `useAtomValue(projection.atom)`.

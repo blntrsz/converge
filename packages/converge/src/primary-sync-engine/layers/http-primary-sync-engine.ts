@@ -6,7 +6,7 @@ import {
   layer as primaryProjectionRouterLayer,
   PrimaryProjectionRouter,
   type PrimaryProjectionConfig,
-} from "../services/primary-projection.ts";
+} from "../../projection/services/primary-projection.ts";
 import { PrimarySyncEngine, type IPrimarySyncEngine } from "../services/primary-sync-engine.ts";
 
 /**
@@ -389,12 +389,7 @@ export interface LayerOptions {
 
 const endpointUrl = (
   baseUrl: string | URL,
-  endpoint:
-    | "/pull"
-    | "/push"
-    | "/events/latest"
-    | `/events/${string}`
-    | `/projection/${string}`,
+  endpoint: "/pull" | "/push" | "/events/latest" | `/events/${string}` | `/projection/${string}`,
   search?: Record<string, string>,
 ) => {
   const url = `${baseUrl}`.replace(/\/+$/, "") + endpoint;
@@ -536,11 +531,9 @@ const projectionStream = <TRow>(
     Effect.tryPromise({
       async try() {
         const response = await fetch(
-          endpointUrl(
-            options.baseUrl,
-            `/projection/${encodeURIComponent(projection.key)}`,
-            { eventId },
-          ),
+          endpointUrl(options.baseUrl, `/projection/${encodeURIComponent(projection.key)}`, {
+            eventId,
+          }),
         );
         if (!response.ok) {
           throw new Error(`Projection ${projection.key} failed with ${response.status}`);

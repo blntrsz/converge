@@ -8,8 +8,8 @@ import { Effect, Layer, Option, Queue, Ref, Result, Schema, Semaphore, Stream } 
 import { EventId } from "../../event/event-id.ts";
 import { EventInstance } from "../../event/event-instance.ts";
 import { EventRouterService } from "../../event/event-router.ts";
-import { ProjectionRouter } from "../../projection/services/projection.ts";
-import { PrimaryProjectionRouter } from "../../primary-sync-engine/services/primary-projection.ts";
+import { PrimaryProjectionRouter } from "../../projection/services/primary-projection.ts";
+import { ReplicaProjectionRouter } from "../../projection/services/replica-projection.ts";
 import { PrimarySyncEngine } from "../../primary-sync-engine/services/primary-sync-engine.ts";
 import { ReplicaApplyContext, type ApplyPhase } from "../services/apply-context.ts";
 import {
@@ -151,7 +151,7 @@ export const layer: Layer.Layer<
   never,
   | PrimarySyncEngine
   | PrimaryProjectionRouter
-  | ProjectionRouter
+  | ReplicaProjectionRouter
   | EventRouterService
   | ReplicaApplyContext
   | IndexedDbDatabase.IndexedDbDatabase
@@ -160,7 +160,7 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const primary = yield* PrimarySyncEngine;
     const primaryProjections = yield* PrimaryProjectionRouter;
-    const projections = yield* ProjectionRouter;
+    const projections = yield* ReplicaProjectionRouter;
     const eventRouter = yield* EventRouterService;
     const applyContext = yield* ReplicaApplyContext;
     const api = yield* ReplicaSyncEngineDatabase.getQueryBuilder;

@@ -9,10 +9,12 @@ import { ReplicaApplyContext } from "../../replica-sync-engine/services/apply-co
 import {
   make,
   type BootstrapFn,
-  ProjectionStorageError,
-  type IReactiveProjection,
-  type ProjectionStorage,
-} from "../services/projection.ts";
+  type IReactiveReplicaProjection,
+  type IReplicaProjectionStore,
+  type ReplicaProjectionStorage,
+  ReplicaProjectionStorageError,
+  type UpdateContext,
+} from "../services/replica-projection.ts";
 
 const SnapshotRow = Schema.Struct({
   key: Schema.String,
@@ -28,14 +30,14 @@ const SnapshotTable = IndexedDbTable.make({
   durability: "strict",
 });
 
-const ProjectionDatabaseVersion = IndexedDbVersion.make(SnapshotTable);
+const ReplicaProjectionDatabaseVersion = IndexedDbVersion.make(SnapshotTable);
 
 /**
  * @since 0.0.0
  * @category database
  */
-export class ProjectionDatabase extends IndexedDbDatabase.make(
-  ProjectionDatabaseVersion,
+export class ReplicaProjectionDatabase extends IndexedDbDatabase.make(
+  ReplicaProjectionDatabaseVersion,
   Effect.fn(function* (api) {
     yield* api.createObjectStore("projection_snapshots");
   }),
@@ -45,8 +47,8 @@ export class ProjectionDatabase extends IndexedDbDatabase.make(
  * @since 0.0.0
  * @category layer
  */
-export const databaseLayer = (databaseName = "converge-projections") =>
-  ProjectionDatabase.layer(databaseName);
+export const databaseLayer = (databaseName = "converge-replica-projections") =>
+  ReplicaProjectionDatabase.layer(databaseName);
 
 /**
  * @since 0.0.0
@@ -61,7 +63,7 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
     readonly key: string;
   },
 ): Effect.Effect<
-  ProjectionStorage<Schema.Schema.Type<TSchema>, ProjectionStorageError>,
+  ReplicaProjectionStorage<Schema.Schema.Type<TSchema>, ReplicaProjectionStorageError>,
   never,
   IndexedDbDatabase.IndexedDbDatabase
 > {
@@ -69,7 +71,7 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
   const encodeSnapshot = Schema.encodeUnknownEffect(schema);
 
   return Effect.gen(function* () {
-    const api = yield* ProjectionDatabase.getQueryBuilder;
+    const api = yield* ReplicaProjectionDatabase.getQueryBuilder;
     const snapshots = api.from("projection_snapshots");
 
     return {
@@ -82,7 +84,7 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
             Effect.map((rows) => rows as ReadonlyArray<SnapshotRow>),
             Effect.mapError(
               (cause) =>
-                new ProjectionStorageError({
+                new ReplicaProjectionStorageError({
                   operation: "load",
                   key: options.key,
                   cause,
@@ -104,7 +106,7 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
           const encoded = yield* encodeSnapshot(snapshot).pipe(
             Effect.mapError(
               (cause) =>
-                new ProjectionStorageError({
+                new ReplicaProjectionStorageError({
                   operation: "encode",
                   key: options.key,
                   cause,
@@ -121,7 +123,7 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
               Effect.asVoid,
               Effect.mapError(
                 (cause) =>
-                  new ProjectionStorageError({
+                  new ReplicaProjectionStorageError({
                     operation: "save",
                     key: options.key,
                     cause,
@@ -133,6 +135,55 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
   });
 }
 
+const makeContext = <
+  TIdentifier,
+  TStoreIdentifier,
+  const TSchema extends Schema.Schema<any>,
+  TBootstrapRow,
+>(
+  tag: Context.Service<
+    TIdentifier,
+    IReactiveReplicaProjection<
+      Schema.Schema.Type<TSchema>,
+      ReplicaProjectionStorageError,
+      TBootstrapRow
+    >
+  >,
+  options: {
+    readonly key: string;
+    readonly schema: TSchema & {
+      readonly DecodingServices: never;
+      readonly EncodingServices: never;
+    };
+    readonly initialValue: Schema.Schema.Type<TSchema>;
+    readonly store?: Context.Service<
+      TStoreIdentifier,
+      IReplicaProjectionStore<Schema.Schema.Type<TSchema>, ReplicaProjectionStorageError>
+    >;
+    readonly bootstrap?: BootstrapFn<
+      Schema.Schema.Type<TSchema>,
+      TBootstrapRow,
+      ReplicaProjectionStorageError
+    >;
+  },
+  updateContext?: UpdateContext,
+) =>
+  Effect.gen(function* () {
+    const storage = yield* indexedDbStorage(options.schema, { key: options.key });
+    const runtime = yield* make({
+      initialValue: options.initialValue,
+      storage,
+      updateContext,
+      bootstrap: options.bootstrap,
+    });
+
+    const context = Context.make(tag, runtime.projection);
+    if (options.store) {
+      return Context.add(context, options.store, runtime.store);
+    }
+    return context as Context.Context<TIdentifier | TStoreIdentifier>;
+  });
+
 /**
  * @since 0.0.0
  * @category layer
@@ -141,10 +192,15 @@ export function indexedDbLayer<
   TIdentifier,
   const TSchema extends Schema.Schema<any>,
   TBootstrapRow = never,
+  TStoreIdentifier = never,
 >(
   tag: Context.Service<
     TIdentifier,
-    IReactiveProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError, TBootstrapRow>
+    IReactiveReplicaProjection<
+      Schema.Schema.Type<TSchema>,
+      ReplicaProjectionStorageError,
+      TBootstrapRow
+    >
   >,
   options: {
     readonly databaseName?: string;
@@ -154,28 +210,24 @@ export function indexedDbLayer<
       readonly EncodingServices: never;
     };
     readonly initialValue: Schema.Schema.Type<TSchema>;
+    readonly store?: Context.Service<
+      TStoreIdentifier,
+      IReplicaProjectionStore<Schema.Schema.Type<TSchema>, ReplicaProjectionStorageError>
+    >;
     readonly bootstrap?: BootstrapFn<
       Schema.Schema.Type<TSchema>,
       TBootstrapRow,
-      ProjectionStorageError
+      ReplicaProjectionStorageError
     >;
   },
 ): Layer.Layer<
-  TIdentifier,
-  ProjectionStorageError | IndexedDbDatabase.IndexedDbDatabaseError,
+  TIdentifier | TStoreIdentifier,
+  ReplicaProjectionStorageError | IndexedDbDatabase.IndexedDbDatabaseError,
   IndexedDb.IndexedDb
 > {
-  return Layer.effect(
-    tag,
-    Effect.gen(function* () {
-      const storage = yield* indexedDbStorage(options.schema, { key: options.key });
-      return yield* make({
-        initialValue: options.initialValue,
-        storage,
-        bootstrap: options.bootstrap,
-      });
-    }),
-  ).pipe(Layer.provide(databaseLayer(options.databaseName)));
+  return Layer.effectContext(makeContext(tag, options)).pipe(
+    Layer.provide(databaseLayer(options.databaseName)),
+  );
 }
 
 /**
@@ -186,10 +238,15 @@ export function indexedDbReplicaLayer<
   TIdentifier,
   const TSchema extends Schema.Schema<any>,
   TBootstrapRow = never,
+  TStoreIdentifier = never,
 >(
   tag: Context.Service<
     TIdentifier,
-    IReactiveProjection<Schema.Schema.Type<TSchema>, ProjectionStorageError, TBootstrapRow>
+    IReactiveReplicaProjection<
+      Schema.Schema.Type<TSchema>,
+      ReplicaProjectionStorageError,
+      TBootstrapRow
+    >
   >,
   options: {
     readonly databaseName?: string;
@@ -199,28 +256,25 @@ export function indexedDbReplicaLayer<
       readonly EncodingServices: never;
     };
     readonly initialValue: Schema.Schema.Type<TSchema>;
+    readonly store?: Context.Service<
+      TStoreIdentifier,
+      IReplicaProjectionStore<Schema.Schema.Type<TSchema>, ReplicaProjectionStorageError>
+    >;
     readonly bootstrap?: BootstrapFn<
       Schema.Schema.Type<TSchema>,
       TBootstrapRow,
-      ProjectionStorageError
+      ReplicaProjectionStorageError
     >;
   },
 ): Layer.Layer<
-  TIdentifier,
-  ProjectionStorageError | IndexedDbDatabase.IndexedDbDatabaseError,
+  TIdentifier | TStoreIdentifier,
+  ReplicaProjectionStorageError | IndexedDbDatabase.IndexedDbDatabaseError,
   IndexedDb.IndexedDb | ReplicaApplyContext
 > {
-  return Layer.effect(
-    tag,
+  return Layer.effectContext(
     Effect.gen(function* () {
-      const mutationContext = yield* ReplicaApplyContext;
-      const storage = yield* indexedDbStorage(options.schema, { key: options.key });
-      return yield* make({
-        initialValue: options.initialValue,
-        storage,
-        mutationContext,
-        bootstrap: options.bootstrap,
-      });
+      const updateContext = yield* ReplicaApplyContext;
+      return yield* makeContext(tag, options, updateContext);
     }),
   ).pipe(Layer.provide(databaseLayer(options.databaseName)));
 }

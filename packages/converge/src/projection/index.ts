@@ -1,11 +1,21 @@
-export * as Projection from "./services/projection";
-export * as MemoryProjection from "./layers/memory-projection";
-export * as IndexedDbProjection from "./layers/indexeddb-projection";
+export * as PrimaryProjection from "./services/primary-projection";
+export * as ReplicaProjection from "./services/replica-projection";
+export * as MemoryReplicaProjection from "./layers/memory-replica-projection";
+export * as IndexedDbReplicaProjection from "./layers/indexeddb-replica-projection";
+export type {
+  AnyPrimaryProjectionConfig,
+  AnyRoutedPrimaryProjectionConfig,
+  PrimaryProjectionBootstrapOptions,
+  PrimaryProjectionConfig,
+  PrimaryProjectionContext,
+  PrimaryProjectionError,
+} from "./services/primary-projection";
 export type {
   BootstrapFn,
-  IProjection,
-  IReactiveProjection,
-  MutationFn,
-  ProjectionStorage,
-} from "./services/projection";
-export { ProjectionStorageError } from "./services/projection";
+  IReactiveReplicaProjection,
+  IReplicaProjection,
+  IReplicaProjectionStore,
+  ReplicaProjectionStorage,
+  UpdateFn,
+} from "./services/replica-projection";
+export { ReplicaProjectionStorageError } from "./services/replica-projection";

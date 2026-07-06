@@ -2,7 +2,7 @@ import { IndexedDb } from "@effect/platform-browser";
 import { Context, Effect, Layer, ManagedRuntime } from "effect";
 import { EventHandler, EventInstance, EventRouter } from "converge/event";
 import { HttpPrimarySyncEngine } from "converge/primary-sync-engine";
-import { IndexedDbProjection, Projection } from "converge/projection";
+import { IndexedDbReplicaProjection, ReplicaProjection } from "converge/projection";
 import {
   IndexedDbReplicaSyncEngine,
   ReplicaApplyContext,
@@ -20,8 +20,19 @@ const projectionStorageKey = "converge-react.todos";
 
 export class TodoProjection extends Context.Service<
   TodoProjection,
-  Projection.IReactiveProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError>
+  ReplicaProjection.IReactiveReplicaProjection<
+    ReadonlyArray<Todo>,
+    ReplicaProjection.ReplicaProjectionStorageError
+  >
 >()("TodoProjection") {}
+
+class TodoProjectionStore extends Context.Service<
+  TodoProjectionStore,
+  ReplicaProjection.IReplicaProjectionStore<
+    ReadonlyArray<Todo>,
+    ReplicaProjection.ReplicaProjectionStorageError
+  >
+>()("TodoProjectionStore") {}
 
 const sortTodos = (todos: ReadonlyArray<Todo>) =>
   [...todos].sort((left, right) => left.createdAt - right.createdAt);
@@ -29,7 +40,7 @@ const sortTodos = (todos: ReadonlyArray<Todo>) =>
 const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
-    const todosProjection = yield* TodoProjection;
+    const todosStore = yield* TodoProjectionStore;
 
     const applyTodoCreated = (todos: ReadonlyArray<Todo>) => {
       if (todos.some((todo) => todo.id === event.eventDetails.id)) {
@@ -50,39 +61,38 @@ const replicaTodoCreatedHandler = EventHandler.make(
       ] as const;
     };
 
-    yield* todosProjection.mutation(applyTodoCreated);
+    yield* todosStore.update(applyTodoCreated);
   }),
 );
 
 const replicaTodoCompletionSetHandler = EventHandler.make(
   todoCompletionSet,
   Effect.fn(function* (event) {
-    const todosProjection = yield* TodoProjection;
+    const todosStore = yield* TodoProjectionStore;
 
-    const applyTodoCompletionSet = (todos: ReadonlyArray<Todo>) => [
-      todos.map((todo) =>
-        todo.id === event.eventDetails.id
-          ? { ...todo, completed: event.eventDetails.completed }
-          : todo,
-      ),
-      undefined,
-    ] as const;
+    const applyTodoCompletionSet = (todos: ReadonlyArray<Todo>) =>
+      [
+        todos.map((todo) =>
+          todo.id === event.eventDetails.id
+            ? { ...todo, completed: event.eventDetails.completed }
+            : todo,
+        ),
+        undefined,
+      ] as const;
 
-    yield* todosProjection.mutation(applyTodoCompletionSet);
+    yield* todosStore.update(applyTodoCompletionSet);
   }),
 );
 
 const replicaTodoDeletedHandler = EventHandler.make(
   todoDeleted,
   Effect.fn(function* (event) {
-    const todosProjection = yield* TodoProjection;
+    const todosStore = yield* TodoProjectionStore;
 
-    const applyTodoDeleted = (todos: ReadonlyArray<Todo>) => [
-      todos.filter((todo) => todo.id !== event.eventDetails.id),
-      undefined,
-    ] as const;
+    const applyTodoDeleted = (todos: ReadonlyArray<Todo>) =>
+      [todos.filter((todo) => todo.id !== event.eventDetails.id), undefined] as const;
 
-    yield* todosProjection.mutation(applyTodoDeleted);
+    yield* todosStore.update(applyTodoDeleted);
   }),
 );
 
@@ -96,15 +106,13 @@ const ReplicaEventRouterLayer = EventRouter.layer({
 
 const ReplicaApplyContextLayer = ReplicaApplyContext.layer;
 
-const TodoProjectionLayer = IndexedDbProjection.indexedDbReplicaLayer(TodoProjection, {
+const TodoProjectionLayer = IndexedDbReplicaProjection.indexedDbReplicaLayer(TodoProjection, {
   databaseName: "converge-react-todos-projection",
   key: projectionStorageKey,
   schema: TodoListSchema,
   initialValue: [] as ReadonlyArray<Todo>,
-}).pipe(
-  Layer.provide(ReplicaApplyContextLayer),
-  Layer.provide(IndexedDb.layerWindow),
-);
+  store: TodoProjectionStore,
+}).pipe(Layer.provide(ReplicaApplyContextLayer), Layer.provide(IndexedDb.layerWindow));
 
 const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
   "converge-react-todos-replica",

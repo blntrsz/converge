@@ -11,11 +11,11 @@ import {
   EventInstance,
   EventRouter,
   IndexedDbReplicaSyncEngine,
-  MemoryProjection,
+  MemoryReplicaProjection,
   PostgresPrimarySyncEngine,
   PrimaryProjection,
   PrimarySyncEngine,
-  Projection,
+  ReplicaProjection,
   ReplicaApplyContext,
   ReplicaSyncEngine,
 } from "../src/index.ts";
@@ -35,7 +35,11 @@ type TodoBootstrapRow = typeof TodoBootstrapRow.Type;
 
 class BootstrapTodoProjection extends Context.Service<
   BootstrapTodoProjection,
-  Projection.IReactiveProjection<ReadonlyArray<TodoBootstrapRow>, never, TodoBootstrapRow>
+  ReplicaProjection.IReactiveReplicaProjection<
+    ReadonlyArray<TodoBootstrapRow>,
+    never,
+    TodoBootstrapRow
+  >
 >()("BootstrapTodoProjection") {}
 
 let replicaHandlerRuns = 0;
@@ -131,7 +135,7 @@ const BootstrapPrimaryProjectionLayer = PrimaryProjection.layer({
   ],
 });
 
-const BootstrapTodoProjectionLayer = MemoryProjection.memoryLayer(BootstrapTodoProjection, {
+const BootstrapTodoProjectionLayer = MemoryReplicaProjection.memoryLayer(BootstrapTodoProjection, {
   initialValue: [] as ReadonlyArray<TodoBootstrapRow>,
   bootstrap: (rows: Stream.Stream<TodoBootstrapRow, unknown>) =>
     rows.pipe(
@@ -140,7 +144,7 @@ const BootstrapTodoProjectionLayer = MemoryProjection.memoryLayer(BootstrapTodoP
     ),
 });
 
-const BootstrapProjectionRouterLayer = Projection.routerLayer({
+const BootstrapReplicaProjectionRouterLayer = ReplicaProjection.routerLayer({
   projections: [
     {
       key: "todos",
@@ -164,7 +168,7 @@ const ReplicaSyncEngineLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provideMerge(ReplicaApplyContext.layer),
   Layer.provideMerge(PrimarySyncEngineLayer),
   Layer.provideMerge(PrimaryProjection.emptyLayer),
-  Layer.provideMerge(Projection.emptyLayer),
+  Layer.provideMerge(ReplicaProjection.emptyLayer),
 );
 
 const BootstrapReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
@@ -177,7 +181,7 @@ const ReplicaSyncEngineWithBootstrapLayer = IndexedDbReplicaSyncEngine.layer.pip
   Layer.provideMerge(ReplicaApplyContext.layer),
   Layer.provideMerge(PrimarySyncEngineLayer),
   Layer.provideMerge(BootstrapPrimaryProjectionLayer),
-  Layer.provideMerge(BootstrapProjectionRouterLayer),
+  Layer.provideMerge(BootstrapReplicaProjectionRouterLayer),
 );
 
 const resetCounters = () => {

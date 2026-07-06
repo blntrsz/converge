@@ -3,8 +3,12 @@ import { assert, describe, it } from "@effect/vitest";
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
-import { Event, EventHandler, EventInstance } from "../src/index.ts";
-import { IndexedDbProjection, MemoryProjection, Projection } from "converge/projection";
+import { Event, EventHandler, EventInstance, ReplicaApplyContext } from "../src/index.ts";
+import {
+  IndexedDbReplicaProjection,
+  MemoryReplicaProjection,
+  ReplicaProjection,
+} from "converge/projection";
 
 const todoCreated = Event.make("todo.created.v1", {
   id: Schema.String,
@@ -30,8 +34,20 @@ type Todo = Schema.Schema.Type<typeof TodoSchema>;
 
 class TodoProjection extends Context.Service<
   TodoProjection,
-  Projection.IReactiveProjection<ReadonlyArray<Todo>, Projection.ProjectionStorageError, Todo>
+  ReplicaProjection.IReactiveReplicaProjection<
+    ReadonlyArray<Todo>,
+    ReplicaProjection.ReplicaProjectionStorageError,
+    Todo
+  >
 >()("TodoProjection") {}
+
+class TodoProjectionStore extends Context.Service<
+  TodoProjectionStore,
+  ReplicaProjection.IReplicaProjectionStore<
+    ReadonlyArray<Todo>,
+    ReplicaProjection.ReplicaProjectionStorageError
+  >
+>()("TodoProjectionStore") {}
 
 const sortTodos = (todos: ReadonlyArray<Todo>) =>
   [...todos].sort((left, right) => left.createdAt - right.createdAt);
@@ -39,9 +55,9 @@ const sortTodos = (todos: ReadonlyArray<Todo>) =>
 const todoCreatedHandler = EventHandler.make(
   todoCreated,
   Effect.fn(function* (event) {
-    const projection = yield* TodoProjection;
+    const store = yield* TodoProjectionStore;
 
-    yield* projection.mutation((todos) => {
+    yield* store.update((todos) => {
       if (todos.some((todo) => todo.id === event.eventDetails.id)) {
         return [todos, undefined] as const;
       }
@@ -65,16 +81,19 @@ const todoCreatedHandler = EventHandler.make(
 const todoCompletionSetHandler = EventHandler.make(
   todoCompletionSet,
   Effect.fn(function* (event) {
-    const projection = yield* TodoProjection;
+    const store = yield* TodoProjectionStore;
 
-    yield* projection.mutation((todos) => [
-      todos.map((todo) =>
-        todo.id === event.eventDetails.id
-          ? { ...todo, completed: event.eventDetails.completed }
-          : todo,
-      ),
-      undefined,
-    ] as const);
+    yield* store.update(
+      (todos) =>
+        [
+          todos.map((todo) =>
+            todo.id === event.eventDetails.id
+              ? { ...todo, completed: event.eventDetails.completed }
+              : todo,
+          ),
+          undefined,
+        ] as const,
+    );
   }),
 );
 
@@ -83,24 +102,36 @@ const FakeIndexedDbLayer = Layer.succeed(
   IndexedDb.make({ indexedDB, IDBKeyRange }),
 );
 
-const memoryProjectionLayer = MemoryProjection.memoryLayer(TodoProjection, {
+const memoryProjectionLayer = MemoryReplicaProjection.memoryLayer(TodoProjection, {
   initialValue: [] as ReadonlyArray<Todo>,
+  store: TodoProjectionStore,
 });
 
 const indexedDbProjectionLayer = (databaseName: string) =>
-  IndexedDbProjection.indexedDbLayer(TodoProjection, {
+  IndexedDbReplicaProjection.indexedDbLayer(TodoProjection, {
     databaseName,
     key: "todos",
     schema: TodoListSchema,
     initialValue: [] as ReadonlyArray<Todo>,
+    store: TodoProjectionStore,
   }).pipe(Layer.provide(FakeIndexedDbLayer));
 
-const bootstrappingIndexedDbProjectionLayer = (databaseName: string) =>
-  IndexedDbProjection.indexedDbLayer(TodoProjection, {
+const indexedDbReplicaProjectionLayer = (databaseName: string) =>
+  IndexedDbReplicaProjection.indexedDbReplicaLayer(TodoProjection, {
     databaseName,
     key: "todos",
     schema: TodoListSchema,
     initialValue: [] as ReadonlyArray<Todo>,
+    store: TodoProjectionStore,
+  }).pipe(Layer.provideMerge(ReplicaApplyContext.layer), Layer.provide(FakeIndexedDbLayer));
+
+const bootstrappingIndexedDbProjectionLayer = (databaseName: string) =>
+  IndexedDbReplicaProjection.indexedDbLayer(TodoProjection, {
+    databaseName,
+    key: "todos",
+    schema: TodoListSchema,
+    initialValue: [] as ReadonlyArray<Todo>,
+    store: TodoProjectionStore,
     bootstrap: (rows: Stream.Stream<Todo, unknown>) =>
       rows.pipe(
         Stream.runCollect,
@@ -108,8 +139,8 @@ const bootstrappingIndexedDbProjectionLayer = (databaseName: string) =>
       ),
   }).pipe(Layer.provide(FakeIndexedDbLayer));
 
-describe("Projection", () => {
-  it.effect("lets event handlers update an injected projection service", () =>
+describe("ReplicaProjection", () => {
+  it.effect("lets event handlers update an injected projection store", () =>
     Effect.gen(function* () {
       const event = yield* EventInstance.make(todoCreated, {
         id: "1",
@@ -128,7 +159,7 @@ describe("Projection", () => {
     }).pipe(Effect.provide(memoryProjectionLayer)),
   );
 
-  it.effect("updates the Effect Atom on mutation", () =>
+  it.effect("updates the Effect Atom on store update", () =>
     Effect.gen(function* () {
       const projection = yield* TodoProjection;
       const registry = AtomRegistry.make({
@@ -231,13 +262,13 @@ describe("Projection", () => {
       const layer = indexedDbProjectionLayer(databaseName);
 
       yield* Effect.gen(function* () {
-        const api = yield* IndexedDbProjection.ProjectionDatabase.getQueryBuilder;
+        const api = yield* IndexedDbReplicaProjection.ReplicaProjectionDatabase.getQueryBuilder;
         yield* api.from("projection_snapshots").upsert({
           key: "todos",
           snapshot: [{ id: 1, title: "Invalid" }],
         });
       }).pipe(
-        Effect.provide(IndexedDbProjection.databaseLayer(databaseName)),
+        Effect.provide(IndexedDbReplicaProjection.databaseLayer(databaseName)),
         Effect.provide(FakeIndexedDbLayer),
       );
 
@@ -250,27 +281,34 @@ describe("Projection", () => {
     }),
   );
 
-  it.effect("keeps optimistic mutations in memory without persisting them", () =>
+  it.effect("keeps optimistic updates in memory without persisting them", () =>
     Effect.gen(function* () {
       const databaseName = `projection-optimistic-${Date.now()}-${Math.random()}`;
-      const writeLayer = indexedDbProjectionLayer(databaseName);
+      const writeLayer = indexedDbReplicaProjectionLayer(databaseName);
       const readLayer = indexedDbProjectionLayer(databaseName);
 
       yield* Effect.gen(function* () {
         const projection = yield* TodoProjection;
+        const store = yield* TodoProjectionStore;
+        const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
 
-        yield* projection.mutation(() => [
-          [{ id: "1", title: "Persisted", completed: false, createdAt: 1 }],
-          undefined,
-        ] as const);
+        yield* applyContext.set({ phase: "accepted", eventId: "event-1" });
+        yield* store.update(
+          () =>
+            [[{ id: "1", title: "Persisted", completed: false, createdAt: 1 }], undefined] as const,
+        );
 
-        yield* projection.optimisticMutation("event-2", () => [
-          [
-            { id: "1", title: "Persisted", completed: false, createdAt: 1 },
-            { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
-          ],
-          undefined,
-        ] as const);
+        yield* applyContext.set({ phase: "optimistic", eventId: "event-2" });
+        yield* store.update(
+          () =>
+            [
+              [
+                { id: "1", title: "Persisted", completed: false, createdAt: 1 },
+                { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
+              ],
+              undefined,
+            ] as const,
+        );
 
         const visible = yield* projection.query((todos) => todos);
         assert.deepStrictEqual(visible, [
@@ -290,66 +328,86 @@ describe("Projection", () => {
     }),
   );
 
-  it.effect("reconciles optimistic mutations after a normal mutation", () =>
+  it.effect("reconciles optimistic updates after an accepted update", () =>
     Effect.gen(function* () {
-      const projection = yield* TodoProjection;
+      const databaseName = `projection-reconcile-${Date.now()}-${Math.random()}`;
+      const layer = indexedDbReplicaProjectionLayer(databaseName);
 
-      yield* projection.mutation(() => [
-        [{ id: "1", title: "Persisted", completed: false, createdAt: 1 }],
-        undefined,
-      ] as const);
+      yield* Effect.gen(function* () {
+        const projection = yield* TodoProjection;
+        const store = yield* TodoProjectionStore;
+        const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
 
-      const addOptimisticTodo = (todos: ReadonlyArray<Todo>) =>
-        [
+        yield* applyContext.set({ phase: "accepted", eventId: "event-1" });
+        yield* store.update(
+          () =>
+            [[{ id: "1", title: "Persisted", completed: false, createdAt: 1 }], undefined] as const,
+        );
+
+        const addOptimisticTodo = (todos: ReadonlyArray<Todo>) =>
           [
-            ...todos,
-            { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
-          ],
-          undefined,
-        ] as const;
+            [...todos, { id: "2", title: "Optimistic", completed: false, createdAt: 2 }],
+            undefined,
+          ] as const;
 
-      yield* projection.optimisticMutation("event-2", addOptimisticTodo);
+        yield* applyContext.set({ phase: "optimistic", eventId: "event-2" });
+        yield* store.update(addOptimisticTodo);
 
-      yield* projection.mutation(() => [
-        [
+        yield* applyContext.set({ phase: "accepted", eventId: "event-3" });
+        yield* store.update(
+          () =>
+            [
+              [
+                { id: "1", title: "Persisted", completed: false, createdAt: 1 },
+                { id: "3", title: "Server", completed: false, createdAt: 3 },
+              ],
+              undefined,
+            ] as const,
+        );
+
+        const visible = yield* projection.query((todos) => todos);
+        assert.deepStrictEqual(visible, [
           { id: "1", title: "Persisted", completed: false, createdAt: 1 },
           { id: "3", title: "Server", completed: false, createdAt: 3 },
-        ],
-        undefined,
-      ] as const);
-
-      const visible = yield* projection.query((todos) => todos);
-      assert.deepStrictEqual(visible, [
-        { id: "1", title: "Persisted", completed: false, createdAt: 1 },
-        { id: "3", title: "Server", completed: false, createdAt: 3 },
-        { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
-      ]);
-    }).pipe(Effect.provide(memoryProjectionLayer)),
+          { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
+        ]);
+      }).pipe(Effect.provide(layer));
+    }),
   );
 
-  it.effect("removes an optimistic mutation from the visible snapshot", () =>
+  it.effect("removes an optimistic update from the visible snapshot", () =>
     Effect.gen(function* () {
-      const projection = yield* TodoProjection;
+      const databaseName = `projection-remove-optimistic-${Date.now()}-${Math.random()}`;
+      const layer = indexedDbReplicaProjectionLayer(databaseName);
 
-      yield* projection.mutation(() => [
-        [{ id: "1", title: "Persisted", completed: false, createdAt: 1 }],
-        undefined,
-      ] as const);
+      yield* Effect.gen(function* () {
+        const projection = yield* TodoProjection;
+        const store = yield* TodoProjectionStore;
+        const applyContext = yield* ReplicaApplyContext.ReplicaApplyContext;
 
-      yield* projection.optimisticMutation("event-2", (todos) => [
-        [
-          ...todos,
-          { id: "2", title: "Optimistic", completed: false, createdAt: 2 },
-        ],
-        undefined,
-      ] as const);
+        yield* applyContext.set({ phase: "accepted", eventId: "event-1" });
+        yield* store.update(
+          () =>
+            [[{ id: "1", title: "Persisted", completed: false, createdAt: 1 }], undefined] as const,
+        );
 
-      yield* projection.removeOptimisticMutation("event-2");
+        yield* applyContext.set({ phase: "optimistic", eventId: "event-2" });
+        yield* store.update(
+          (todos) =>
+            [
+              [...todos, { id: "2", title: "Optimistic", completed: false, createdAt: 2 }],
+              undefined,
+            ] as const,
+        );
 
-      const visible = yield* projection.query((todos) => todos);
-      assert.deepStrictEqual(visible, [
-        { id: "1", title: "Persisted", completed: false, createdAt: 1 },
-      ]);
-    }).pipe(Effect.provide(memoryProjectionLayer)),
+        yield* applyContext.set({ phase: "rejected", eventId: "event-2" });
+        yield* store.update((todos) => [todos, undefined] as const);
+
+        const visible = yield* projection.query((todos) => todos);
+        assert.deepStrictEqual(visible, [
+          { id: "1", title: "Persisted", completed: false, createdAt: 1 },
+        ]);
+      }).pipe(Effect.provide(layer));
+    }),
   );
 });
