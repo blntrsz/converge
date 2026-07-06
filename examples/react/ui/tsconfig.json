@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "lib": ["ESNext", "DOM"],
+    "types": ["bun", "react"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@converge/react-core": ["../core/src/index.ts"],
+      "@converge/react-core/*": ["../core/src/*"]
+    }
+  },
+  "include": ["src", "bun-env.d.ts", "build.ts"],
+  "exclude": ["dist", "node_modules"]
+}

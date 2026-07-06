@@ -4,7 +4,8 @@
   "workspaces": {
     "packages": [
       "packages/*",
-      "examples/*"
+      "examples/*",
+      "examples/*/*"
     ],
     "catalog": {
       "@effect/atom-react": "4.0.0-beta.85",

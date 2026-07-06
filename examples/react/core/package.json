@@ -1,0 +1,23 @@
+{
+  "name": "@converge/react-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./todo": "./src/todo/index.ts",
+    "./db/*": "./src/db/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@effect/sql-pglite": "catalog:",
+    "@paralleldrive/cuid2": "catalog:",
+    "converge": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

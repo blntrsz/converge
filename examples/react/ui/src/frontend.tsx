@@ -8,8 +8,9 @@
 import { StrictMode } from "react";
 import { RegistryProvider } from "@effect/atom-react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App";
-import { getTodoProjection } from "./todo-replica";
+import "./index.css";
+import { TodoApp } from "./features/todos/TodoApp";
+import { getTodoProjection } from "./features/todos/replica";
 
 const elem = document.getElementById("root")!;
 
@@ -20,7 +21,7 @@ const todoProjection = await getTodoProjection();
 root.render(
   <StrictMode>
     <RegistryProvider>
-      <App todoProjection={todoProjection} />
+      <TodoApp todoProjection={todoProjection} />
     </RegistryProvider>
   </StrictMode>,
 );

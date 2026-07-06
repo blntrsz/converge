@@ -1,8 +1,7 @@
-import "./index.css";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/shared/ui/badge";
+import { Button } from "@/shared/ui/button";
 import {
   Card,
   CardContent,
@@ -10,20 +9,20 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { createTodo, deleteTodo, setTodoCompleted, syncTodos } from "./todo-replica";
+} from "@/shared/ui/card";
+import { Input } from "@/shared/ui/input";
+import { createTodo, deleteTodo, setTodoCompleted, syncTodos } from "./replica";
 import type {
   IReactiveReplicaProjection,
   ReplicaProjectionStorageError,
 } from "converge/projection";
-import type { Todo } from "./todo-events";
+import type { Type } from "@converge/react-core/features/todos";
 
-export function App({
+export function TodoApp({
   todoProjection,
 }: {
   readonly todoProjection: IReactiveReplicaProjection<
-    ReadonlyArray<Todo>,
+    ReadonlyArray<Type>,
     ReplicaProjectionStorageError
   >;
 }) {
@@ -188,4 +187,4 @@ export function App({
   );
 }
 
-export default App;
+export default TodoApp;
