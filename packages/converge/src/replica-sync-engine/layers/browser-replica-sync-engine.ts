@@ -1,5 +1,6 @@
 import { IndexedDb } from "@effect/platform-browser";
 import { Layer } from "effect";
+import type * as Duration from "effect/Duration";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import type * as EventHandler from "../../event/event-handler.ts";
 import { layer as eventRouterLayer } from "../../event/event-router.ts";
@@ -10,7 +11,10 @@ import {
   routerLayer,
 } from "../../projection/services/replica-projection.ts";
 import { layer as replicaApplyContextLayer } from "../services/apply-context.ts";
-import { databaseLayer, layer as replicaSyncEngineLayer } from "./indexeddb-replica-sync-engine.ts";
+import {
+  databaseLayer,
+  makeLayer as makeReplicaSyncEngineLayer,
+} from "./indexeddb-replica-sync-engine.ts";
 
 /**
  * @since 0.0.0
@@ -38,6 +42,7 @@ export interface BrowserLayerOptions<
   readonly handlers: ReadonlyArray<EventHandler.AnyEventHandler>;
   readonly projection: TProjections;
   readonly primary: BrowserLayerPrimaryOptions;
+  readonly pullInterval?: Duration.Input;
 }
 
 /**
@@ -91,7 +96,7 @@ export const browserLayer = (
     : PrimaryProjection.emptyLayer;
   const replicaProjectionRouterLayer = projectionRouterLayer(options.projection);
 
-  const layer = replicaSyncEngineLayer.pipe(
+  const layer = makeReplicaSyncEngineLayer({ pullInterval: options.pullInterval }).pipe(
     Layer.provide(eventRouterLayer({ handlers: options.handlers })),
     Layer.provide(replicaDatabaseLayer),
     Layer.provideMerge(replicaApplyContextLayer),

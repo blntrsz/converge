@@ -43,12 +43,21 @@ Handlers use `TodoProjection.store`; React subscribes via `todosAtom` from `brow
 
 ```ts
 import { IndexedDbReplicaSyncEngine } from "converge/replica-sync-engine";
+import { Duration } from "effect";
 
-export const { layer, runtime, atom: todosAtom } = IndexedDbReplicaSyncEngine.browserLayer({
+export const {
+  layer,
+  runtime,
+  atom: todosAtom,
+} = IndexedDbReplicaSyncEngine.browserLayer({
   handlers: todoHandlers,
   projection: [TodoProjection],
   primary: { baseUrl: "/api/sync" },
+  pullInterval: Duration.minutes(1),
 });
 ```
+
+The browser replica pulls once when the layer is acquired, then keeps polling. The default
+`pullInterval` is one minute.
 
 Database names are derived from projection keys; no manual layer composition needed.

@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Option, Result, Schema, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { TestClock } from "effect/testing";
@@ -48,6 +48,7 @@ let optimisticHandlerRuns = 0;
 let acceptedHandlerRuns = 0;
 let rejectedHandlerRuns = 0;
 let shouldThrow = false;
+let primaryPullCalls = 0;
 
 const replicaTodoCreatedHandler = EventHandler.make(
   todoCreated,
@@ -186,12 +187,42 @@ const ReplicaSyncEngineWithBootstrapLayer = IndexedDbReplicaSyncEngine.layer.pip
   Layer.provideMerge(BootstrapReplicaProjectionRouterLayer),
 );
 
+const CountingPrimarySyncEngineLayer = Layer.succeed(
+  PrimarySyncEngine.PrimarySyncEngine,
+  PrimarySyncEngine.PrimarySyncEngine.of({
+    pull: () =>
+      Effect.sync(() => {
+        primaryPullCalls += 1;
+        return { data: [], hasNext: false };
+      }),
+    push: (...events) => Effect.succeed(events.map((event) => Result.succeed(event))),
+    getLatestEvent: () => Effect.succeed(Option.none()),
+    getEvent: () => Effect.succeed(Option.none()),
+  }),
+);
+
+const PollingReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
+  "test-replica-polling",
+).pipe(Layer.provide(FakeIndexedDbLayer));
+
+const PollingReplicaSyncEngineLayer = IndexedDbReplicaSyncEngine.makeLayer({
+  pullInterval: "1 second",
+}).pipe(
+  Layer.provide(ReplicaEventRouterLayer),
+  Layer.provideMerge(PollingReplicaDatabaseLayer),
+  Layer.provideMerge(ReplicaApplyContext.layer),
+  Layer.provideMerge(CountingPrimarySyncEngineLayer),
+  Layer.provideMerge(PrimaryProjection.emptyLayer),
+  Layer.provideMerge(ReplicaProjection.emptyLayer),
+);
+
 const resetCounters = () => {
   replicaHandlerRuns = 0;
   optimisticHandlerRuns = 0;
   acceptedHandlerRuns = 0;
   rejectedHandlerRuns = 0;
   shouldThrow = false;
+  primaryPullCalls = 0;
 };
 
 const waitForPrimaryEvent = (
@@ -212,6 +243,28 @@ const waitForReplicaHandler = (target: number): Effect.Effect<void> =>
     for (let i = 0; i < 200; i++) {
       yield* Effect.sleep("50 millis");
       if (replicaHandlerRuns >= target) return;
+    }
+  });
+
+const waitForAcceptedReplicaEvent = (eventId: string) =>
+  Effect.gen(function* () {
+    const api = yield* IndexedDbReplicaSyncEngine.ReplicaSyncEngineDatabase.getQueryBuilder;
+    const eventHistory = api.from("event_history");
+
+    for (let i = 0; i < 200; i++) {
+      const rows = yield* eventHistory.select("eventId").equals(eventId).pipe(Effect.orDie);
+      if (rows.length > 0) return;
+      yield* Effect.sleep("50 millis");
+    }
+
+    assert.fail(`expected replica event_history to contain ${eventId}`);
+  });
+
+const waitForPrimaryPullCalls = (target: number): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    for (let i = 0; i < 20; i++) {
+      yield* Effect.yieldNow;
+      if (primaryPullCalls >= target) return;
     }
   });
 
@@ -388,6 +441,49 @@ layer(ReplicaSyncEngineLayer)((it) => {
   );
 
   it.effect(
+    "forward tasks reconcile events accepted before the local proposal",
+    () =>
+      TestClock.withLive(
+        Effect.gen(function* () {
+          resetCounters();
+          const replica = yield* ReplicaSyncEngine.ReplicaSyncEngine;
+          const primary = yield* PrimarySyncEngine.PrimarySyncEngine;
+          const api = yield* IndexedDbReplicaSyncEngine.ReplicaSyncEngineDatabase.getQueryBuilder;
+
+          const seedEvent = yield* EventInstance.make(todoCreated, {
+            id: "5-seed",
+            name: "Seed",
+          });
+          const remoteEvent = yield* EventInstance.make(todoCreated, {
+            id: "5-remote-before-local",
+            name: "Remote before local",
+          });
+          const localEvent = yield* EventInstance.make(todoCreated, {
+            id: "5-local-after-remote",
+            name: "Local after remote",
+          });
+
+          yield* primary.push(seedEvent);
+          yield* replica.poke();
+          yield* waitForAcceptedReplicaEvent(seedEvent.eventId);
+
+          yield* primary.push(remoteEvent);
+          yield* replica.push(localEvent);
+
+          yield* waitForAcceptedReplicaEvent(remoteEvent.eventId);
+          yield* waitForAcceptedReplicaEvent(localEvent.eventId);
+
+          const rows = yield* api.from("event_history").select();
+          assert.deepStrictEqual(rows.map((row) => row.eventId).slice(-2), [
+            remoteEvent.eventId,
+            localEvent.eventId,
+          ]);
+        }),
+      ),
+    30000,
+  );
+
+  it.effect(
     "checkout is read-only until returning to Latest",
     () =>
       TestClock.withLive(
@@ -470,6 +566,26 @@ layer(ReplicaSyncEngineLayer)((it) => {
         }),
       ),
     60000,
+  );
+});
+
+layer(PollingReplicaSyncEngineLayer)((it) => {
+  it.effect("pulls on mount and then on the configured interval", () =>
+    Effect.gen(function* () {
+      resetCounters();
+      yield* ReplicaSyncEngine.ReplicaSyncEngine;
+
+      yield* waitForPrimaryPullCalls(1);
+      assert.strictEqual(primaryPullCalls, 1);
+
+      yield* TestClock.adjust("999 millis");
+      yield* Effect.yieldNow;
+      assert.strictEqual(primaryPullCalls, 1);
+
+      yield* TestClock.adjust("1 millis");
+      yield* waitForPrimaryPullCalls(2);
+      assert.strictEqual(primaryPullCalls, 2);
+    }),
   );
 });
 
