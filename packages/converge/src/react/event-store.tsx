@@ -7,11 +7,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { EventStoreConfig } from "./make-event-store.ts";
+import type { CommitAtom, EventStoreConfig } from "./make-event-store.ts";
 import { makeEventStore } from "./make-event-store.ts";
 
 type EventStoreContextValue = {
-  readonly commit: (event: import("../event/event-instance.ts").EventInstance) => Promise<void>;
+  readonly commit: CommitAtom;
 };
 
 const EventStoreContext = createContext<EventStoreContextValue | null>(null);

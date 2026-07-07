@@ -1,11 +1,13 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { assert, describe, it } from "vitest";
 import { Effect, Layer, Option, Result, Schema } from "effect";
 import { render, screen, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { IndexedDb } from "@effect/platform-browser";
 import { Event, EventHandler, EventInstance } from "../../src/event/index.ts";
 import { PrimarySyncEngine } from "../../src/primary-sync-engine/index.ts";
+import * as Atom from "effect/unstable/reactivity/Atom";
 import { EventStoreProvider, indexeddbProjection, useEventStore } from "../../src/react/index.ts";
 
 const todoCreated = Event.make("todo.created.v1", {
@@ -81,6 +83,7 @@ const eventStoreConfig = {
 
 const TestTodoList = () => {
   const { commit } = useEventStore();
+  const commitEvent = useAtomSet(commit, { mode: "promise" });
   const todos = useAtomValue(todoProjection.atom);
 
   return (
@@ -93,7 +96,7 @@ const TestTodoList = () => {
             title: "Buy milk",
             createdAt: 1,
           }).pipe(
-            Effect.flatMap((event) => Effect.promise(() => commit(event))),
+            Effect.flatMap((event) => Effect.promise(() => commitEvent(event))),
             Effect.runPromise,
           );
         }}
@@ -109,7 +112,34 @@ const TestTodoList = () => {
   );
 };
 
+const CommitProbe = ({ onCommit }: { readonly onCommit: (commit: unknown) => void }) => {
+  const { commit } = useEventStore();
+
+  useEffect(() => {
+    onCommit(commit);
+  }, [commit, onCommit]);
+
+  return null;
+};
+
 describe("useEventStore", () => {
+  it("exposes commit as a writable atom", async () => {
+    let commit: unknown;
+
+    render(
+      <EventStoreProvider config={eventStoreConfig}>
+        <CommitProbe onCommit={(value) => {
+          commit = value;
+        }} />
+      </EventStoreProvider>,
+    );
+
+    await waitFor(() => {
+      assert.ok(commit);
+      assert.ok(Atom.isWritable(commit as Atom.Writable<unknown, unknown>));
+    });
+  });
+
   it("commits events through the provider and updates projection atoms", async () => {
     render(
       <EventStoreProvider config={eventStoreConfig}>

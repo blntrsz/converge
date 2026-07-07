@@ -1,7 +1,8 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { EventInstance } from "converge/event";
 import { useEventStore } from "converge/react";
 import { todoCompletionSet, todoCreated, todoDeleted } from "@converge/react-core/todo";
+import * as TodoModel from "@converge/react-core/todo/model";
 import { Effect } from "effect";
 import { useEffect, useState, type FormEvent } from "react";
 import { Badge } from "@/shared/ui/badge";
@@ -17,13 +18,9 @@ import {
 import { Input } from "@/shared/ui/input";
 import { todoProjection } from "./replica";
 
-const makeTodoId = () =>
-  typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `todo-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
 export function TodoApp() {
   const { commit } = useEventStore();
+  const commitEvent = useAtomSet(commit, { mode: "promise" });
   const todos = useAtomValue(todoProjection.atom);
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState("Ready");
@@ -52,13 +49,14 @@ export function TodoApp() {
 
     setTitle("");
     setStatus("Saving locally...");
-    await commit(
+    const todo = await Effect.runPromise(TodoModel.make({ title: nextTitle }));
+    await commitEvent(
       await Effect.runPromise(
         EventInstance.make(todoCreated, {
-          id: makeTodoId(),
-          title: nextTitle,
-          completed: false,
-          createdAt: new Date().toISOString(),
+          id: todo.id,
+          title: todo.title,
+          completed: todo.completed,
+          createdAt: todo.createdAt,
         }),
       ),
     );
@@ -144,7 +142,7 @@ export function TodoApp() {
                             completed: event.target.checked,
                           }),
                         )
-                          .then((todoEvent) => commit(todoEvent))
+                          .then((todoEvent) => commitEvent(todoEvent))
                           .then(() => {
                             setStatus("Saved locally; sync queued");
                           });
@@ -167,7 +165,7 @@ export function TodoApp() {
                       onClick={() => {
                         setStatus("Saving locally...");
                         void Effect.runPromise(EventInstance.make(todoDeleted, { id: todo.id }))
-                          .then((todoEvent) => commit(todoEvent))
+                          .then((todoEvent) => commitEvent(todoEvent))
                           .then(() => {
                             setStatus("Saved locally; sync queued");
                           });

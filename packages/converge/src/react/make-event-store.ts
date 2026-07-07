@@ -1,10 +1,17 @@
 import { IndexedDb } from "@effect/platform-browser";
 import { Effect, type Layer } from "effect";
+import * as Atom from "effect/unstable/reactivity/Atom";
 import { layer as httpPrimarySyncEngineLayer } from "../primary-sync-engine/layers/http-primary-sync-engine.ts";
 import type { AnyEventHandler } from "../event/event-handler.ts";
 import { EventInstance } from "../event/event-instance.ts";
 import type { IndexedDbProjection } from "./indexeddb-projection.ts";
 import { createEventStoreRuntime } from "./event-store-runtime.ts";
+
+/**
+ * @since 0.0.0
+ * @category model
+ */
+export type CommitAtom = Atom.AtomResultFn<EventInstance, void, unknown>;
 
 /**
  * @since 0.0.0
@@ -24,7 +31,7 @@ export interface EventStoreConfig {
  * @category model
  */
 export interface EventStore {
-  readonly commit: (event: EventInstance) => Promise<void>;
+  readonly commit: CommitAtom;
 }
 
 /**
@@ -44,9 +51,13 @@ export const makeEventStore = (config: EventStoreConfig) => {
     indexedDbLayer: config.indexedDbLayer,
   });
 
+  const commit = Atom.fn((event: EventInstance) =>
+    runtime.commit(event).pipe(Effect.asVoid),
+  );
+
   return {
     activate: () => runtime.activate.pipe(Effect.runPromise),
-    commit: (event: EventInstance) => runtime.commit(event).pipe(Effect.runPromise),
+    commit,
     poke: () => runtime.poke.pipe(Effect.runPromise),
   };
 };

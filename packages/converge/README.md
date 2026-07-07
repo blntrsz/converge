@@ -65,7 +65,7 @@ Use the handlers in `EventRouter.layer`, provide `ReplicaApplyContext.layer` to 
 ```ts
 import { EventHandler } from "converge/event";
 import { EventStoreProvider, indexeddbProjection, useEventStore } from "converge/react";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 
 const todoProjection = indexeddbProjection({
   key: "todos",
@@ -86,8 +86,9 @@ export const eventStoreConfig = {
 
 function TodoList() {
   const { commit } = useEventStore();
+  const commitEvent = useAtomSet(commit, { mode: "promise" });
   const todos = useAtomValue(todoProjection.atom);
-  // commit(await EventInstance.make(todoCreated, details).pipe(Effect.runPromise))
+  // await commitEvent(await EventInstance.make(todoCreated, todo).pipe(Effect.runPromise))
 }
 
 <EventStoreProvider config={eventStoreConfig}>
