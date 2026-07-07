@@ -1,9 +1,7 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { EventInstance } from "converge/event";
+import { makeCreatedEvent, todoCompletionSet, todoDeleted } from "@converge/react-core/todo";
 import { useEventStore } from "converge/react";
-import { todoCompletionSet, todoCreated, todoDeleted } from "@converge/react-core/todo";
-import * as TodoModel from "@converge/react-core/todo/model";
-import { Effect } from "effect";
+import { EventInstance } from "converge/event";
 import { useEffect, useState, type FormEvent } from "react";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -49,12 +47,7 @@ export function TodoApp() {
 
     setTitle("");
     setStatus("Saving locally...");
-    await commitEvent(
-      Effect.gen(function* () {
-        const todo = yield* TodoModel.make({ title: nextTitle });
-        return yield* EventInstance.make(todoCreated, todo);
-      }),
-    );
+    await commitEvent(makeCreatedEvent({ title: nextTitle }));
     setStatus("Saved locally; sync queued");
   };
 

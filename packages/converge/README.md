@@ -88,8 +88,7 @@ function TodoList() {
   const { commit } = useEventStore();
   const commitEvent = useAtomSet(commit, { mode: "promise" });
   const todos = useAtomValue(todoProjection.atom);
-  // await commitEvent(EventInstance.make(todoCreated, todo))
-  // await commitEvent(Effect.gen(function* () { const todo = yield* TodoModel.make({ title }); return yield* EventInstance.make(todoCreated, todo) }))
+  // await commitEvent(Todo.makeCreatedEvent({ title }))
 }
 
 <EventStoreProvider config={eventStoreConfig}>
