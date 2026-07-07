@@ -62,6 +62,12 @@ export function TodoApp() {
     setStatus("Saved locally; sync queued");
   };
 
+  const handleDeleteTodo = async (id: string) => {
+    setStatus("Saving locally...");
+    await commitEvent(EventInstance.make(todoDeleted, { id }));
+    setStatus("Saved locally; sync queued");
+  };
+
   return (
     <main className="min-h-screen px-4 py-8 text-zinc-950 sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
@@ -151,14 +157,7 @@ export function TodoApp() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        setStatus("Saving locally...");
-                        void commitEvent(EventInstance.make(todoDeleted, { id: todo.id })).then(
-                          () => {
-                            setStatus("Saved locally; sync queued");
-                          },
-                        );
-                      }}
+                      onClick={() => void handleDeleteTodo(todo.id)}
                     >
                       Delete
                     </Button>
