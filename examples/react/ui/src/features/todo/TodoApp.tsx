@@ -51,6 +51,17 @@ export function TodoApp() {
     setStatus("Saved locally; sync queued");
   };
 
+  const handleCompletionChange = async (id: string, completed: boolean) => {
+    setStatus("Saving locally...");
+    await commitEvent(
+      EventInstance.make(todoCompletionSet, {
+        id,
+        completed,
+      }),
+    );
+    setStatus("Saved locally; sync queued");
+  };
+
   return (
     <main className="min-h-screen px-4 py-8 text-zinc-950 sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
@@ -123,15 +134,7 @@ export function TodoApp() {
                       type="checkbox"
                       checked={todo.completed}
                       onChange={(event) => {
-                        setStatus("Saving locally...");
-                        void commitEvent(
-                          EventInstance.make(todoCompletionSet, {
-                            id: todo.id,
-                            completed: event.target.checked,
-                          }),
-                        ).then(() => {
-                          setStatus("Saved locally; sync queued");
-                        });
+                        void handleCompletionChange(todo.id, event.target.checked);
                       }}
                       className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
                       aria-label={`Mark ${todo.title} complete`}
