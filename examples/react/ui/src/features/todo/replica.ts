@@ -1,6 +1,6 @@
 import { IndexedDb } from "@effect/platform-browser";
-import { Context, Effect, Layer, ManagedRuntime } from "effect";
-import { EventHandler, EventInstance, EventRouter } from "converge/event";
+import { Context, Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { EventInstance, EventRouter } from "converge/event";
 import { HttpPrimarySyncEngine } from "converge/primary-sync-engine";
 import {
   IndexedDbReplicaProjection,
@@ -12,18 +12,12 @@ import {
   ReplicaApplyContext,
   ReplicaSyncEngine,
 } from "converge/replica-sync-engine";
-import {
-  addTodo,
-  removeTodo,
-  setTodoCompletion,
-  todoCompletionSet,
-  todoCreated,
-  todoDeleted,
-  TodoListSchema,
-  type Type,
-} from "@converge/react-core/features/todos";
+import { todoCompletionSet, todoCreated, todoDeleted } from "@converge/react-core/todo";
+import { TodoModel, type Type } from "@converge/react-core/todo/model";
+import { databaseLayer as TodoDatabaseLayer, todoHandlers } from "./handlers";
 
 const projectionStorageKey = "converge-react.todos";
+const TodoListSchema = Schema.Array(TodoModel);
 
 export class TodoProjection extends Context.Service<
   TodoProjection,
@@ -33,31 +27,22 @@ export class TodoProjection extends Context.Service<
   >
 >()("TodoProjection") {}
 
-class TodoProjectionStore extends Context.Service<
-  TodoProjectionStore,
-  ReplicaProjection.IReplicaProjectionStore<
-    ReadonlyArray<Type>,
-    ReplicaProjection.ReplicaProjectionStorageError
-  >
->()("TodoProjectionStore") {}
-
 const HttpPrimarySyncEngineLayer = HttpPrimarySyncEngine.layer({
   baseUrl: "/api/sync",
 });
 
 const ReplicaEventRouterLayer = EventRouter.layer({
-  handlers: [replicaTodoCreatedHandler, replicaTodoCompletionSetHandler, replicaTodoDeletedHandler],
+  handlers: [...todoHandlers],
 });
 
 const ReplicaApplyContextLayer = ReplicaApplyContext.layer;
 
-const TodoProjectionLayer = IndexedDbReplicaProjection.indexedDbReplicaLayer(TodoProjection, {
+const TodoProjectionLayer = IndexedDbReplicaProjection.indexedDbLayer(TodoProjection, {
   databaseName: "converge-react-todos-projection",
   key: projectionStorageKey,
   schema: TodoListSchema,
   initialValue: [] as ReadonlyArray<Type>,
-  store: TodoProjectionStore,
-}).pipe(Layer.provide(ReplicaApplyContextLayer), Layer.provide(IndexedDb.layerWindow));
+}).pipe(Layer.provide(IndexedDb.layerWindow));
 
 const ReplicaProjectionRouterLayer = ReplicaProjection.routerLayer({
   projections: [
@@ -72,8 +57,13 @@ const ReplicaDatabaseLayer = IndexedDbReplicaSyncEngine.databaseLayer(
   "converge-react-todos-replica",
 ).pipe(Layer.provide(IndexedDb.layerWindow));
 
+const TodoDatabaseLayerWithIndexedDb = TodoDatabaseLayer().pipe(
+  Layer.provide(IndexedDb.layerWindow),
+);
+
 const ReplicaTodoLayer = IndexedDbReplicaSyncEngine.layer.pipe(
   Layer.provide(ReplicaEventRouterLayer),
+  Layer.provide(TodoDatabaseLayerWithIndexedDb),
   Layer.provide(ReplicaDatabaseLayer),
   Layer.provideMerge(ReplicaApplyContextLayer),
   Layer.provideMerge(PrimaryProjection.emptyLayer),
@@ -105,7 +95,8 @@ export const createTodo = (title: string) => {
       const event = yield* EventInstance.make(todoCreated, {
         id: makeTodoId(),
         title: trimmedTitle,
-        createdAt: Date.now(),
+        completed: false,
+        createdAt: new Date().toISOString(),
       });
 
       yield* replica.push(event);
