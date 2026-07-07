@@ -17,6 +17,13 @@ export class TodoModel extends Model.Class<TodoModel>("TodoModel")({
  */
 export type Type = Schema.Schema.Type<typeof TodoModel>;
 
+/**
+ * Plain-object schema for replica projection storage and bootstrap rows.
+ *
+ * @category schema
+ */
+export const TodoListSchema = Schema.Array(TodoModel.json);
+
 export type TodoCreatedDetails = Pick<Type, "id" | "title" | "createdAt">;
 
 /**

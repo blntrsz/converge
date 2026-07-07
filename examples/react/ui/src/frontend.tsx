@@ -7,21 +7,23 @@
 
 import { StrictMode } from "react";
 import { RegistryProvider } from "@effect/atom-react";
+import * as Atom from "effect/unstable/reactivity/Atom";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import { TodoApp } from "./features/todo/TodoApp";
-import { getTodoProjection } from "./features/todo/replica";
+import { TodoApp } from "./features/todo/todo-app";
+import { replicaAtomRuntime, ReplicaTodoLayer } from "./features/todo/replica";
 
 const elem = document.getElementById("root")!;
 
 // https://bun.com/docs/bundler/hot-reloading#import-meta-hot-data
 const root = (import.meta.hot.data.root ??= createRoot(elem));
-const todoProjection = await getTodoProjection();
 
 root.render(
   <StrictMode>
-    <RegistryProvider>
-      <TodoApp todoProjection={todoProjection} />
+    <RegistryProvider
+      initialValues={[Atom.initialValue(replicaAtomRuntime.layer, ReplicaTodoLayer)]}
+    >
+      <TodoApp />
     </RegistryProvider>
   </StrictMode>,
 );

@@ -47,7 +47,7 @@ export const todoDeletedHandler = EventHandler.make(
   Effect.fn(function* (event) {
     const repository = yield* makeRepository;
 
-    repository.delete(event.eventDetails.id);
+    yield* repository.delete(event.eventDetails.id);
   }),
 );
 

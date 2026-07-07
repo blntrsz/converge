@@ -4,15 +4,17 @@ import { Migrator, SqlClient } from "effect/unstable/sql";
 import { PgliteSqlClient } from "./pglite-client";
 
 const todoMigrations = Migrator.fromRecord({
-  "2_create_todos": Effect.gen(function* () {
+  "2_create_todo": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
+    yield* sql`DROP TABLE IF EXISTS todos`;
+
     yield* sql`
-      CREATE TABLE IF NOT EXISTS todos (
+      CREATE TABLE IF NOT EXISTS todo (
         id text PRIMARY KEY,
         title text NOT NULL,
         completed boolean NOT NULL DEFAULT false,
-        created_at double precision NOT NULL
+        created_at text NOT NULL
       )
     `;
   }),

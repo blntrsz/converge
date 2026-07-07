@@ -1,6 +1,9 @@
 import { Context, Effect, HashMap, Layer, Option, Schema, Semaphore, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as AtomRef from "effect/unstable/reactivity/AtomRef";
+import { ReplicaApplyContext } from "../../replica-sync-engine/services/apply-context.ts";
+import * as IndexedDbReplicaProjection from "../layers/indexeddb-replica-projection.ts";
 
 /**
  * @since 0.0.0
@@ -76,7 +79,7 @@ export interface IReactiveReplicaProjection<
  * @category service-interface
  */
 export interface IReplicaProjectionStore<TSnapshot, TError = never> {
-  readonly update: <A>(f: UpdateFn<TSnapshot, A, TError>) => Effect.Effect<A, TError>;
+  readonly update: <A>(f: UpdateFn<TSnapshot, A, TError>) => Effect.Effect<A, TError, any>;
 }
 
 /**
@@ -193,6 +196,7 @@ export function make<
   readonly initialValue: TSnapshot;
   readonly storage?: TStorage;
   readonly updateContext?: UpdateContext;
+  readonly resolveReplicaApplyContext?: boolean;
   readonly bootstrap?: BootstrapFn<TSnapshot, TBootstrapRow, TError>;
 }): Effect.Effect<
   ReplicaProjectionRuntime<TSnapshot, RuntimeError<TStorage, TError>, TBootstrapRow>,
@@ -285,9 +289,26 @@ export function make<
         ref.set(snapshot);
       });
 
+    const readApplyPhase = Effect.gen(function* () {
+      const applyContext = yield* ReplicaApplyContext;
+      return yield* applyContext.current;
+    });
+
     const applyUpdate = <A>(f: UpdateFn<TSnapshot, A, RuntimeError<TStorage, TError>>) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
+          if (options.resolveReplicaApplyContext) {
+            const { eventId, phase } = yield* readApplyPhase;
+            if (phase === "optimistic") {
+              return yield* applyOptimisticUpdate(eventId, f);
+            }
+            if (phase === "rejected") {
+              yield* removeOptimisticUpdate(eventId);
+              return undefined as never;
+            }
+            return yield* applyAcceptedUpdate(f, eventId);
+          }
+
           if (options.updateContext) {
             const { eventId, phase } = yield* options.updateContext.current;
             if (phase === "optimistic") {
@@ -430,3 +451,108 @@ export const emptyLayer: Layer.Layer<ReplicaProjectionRouter> = Layer.succeed(
     find: () => undefined,
   }),
 );
+
+/**
+ * @since 0.0.0
+ * @category model
+ */
+export interface DefinedReplicaProjection<
+  TKey extends string,
+  TSnapshot,
+  TBootstrapRow = never,
+> {
+  readonly key: TKey;
+  readonly schema: Schema.Schema<TSnapshot>;
+  readonly initialValue: TSnapshot;
+  readonly databaseName: string;
+  readonly tag: Context.Service<
+    any,
+    IReactiveReplicaProjection<TSnapshot, ReplicaProjectionStorageError, TBootstrapRow>
+  >;
+  readonly store: Context.Service<
+    any,
+    IReplicaProjectionStore<TSnapshot, ReplicaProjectionStorageError>
+  >;
+  readonly projectionLayer: Layer.Layer<
+    any,
+    | ReplicaProjectionStorageError
+    | import("@effect/platform-browser").IndexedDbDatabase.IndexedDbDatabaseError,
+    import("@effect/platform-browser").IndexedDb.IndexedDb
+  >;
+  readonly atom: (runtime: Atom.AtomRuntime<any, any>) => Atom.Atom<TSnapshot>;
+}
+
+const projectionDatabaseName = (key: string) => `converge-projection-${key.replace(/\./g, "-")}`;
+
+/**
+ * @since 0.0.0
+ * @category constructor
+ */
+export function define<
+  const TKey extends string,
+  const TSchema extends Schema.Schema<any>,
+  TBootstrapRow = never,
+>(options: {
+  readonly key: TKey;
+  readonly schema: TSchema & {
+    readonly DecodingServices: never;
+    readonly EncodingServices: never;
+  };
+  readonly initialValue: Schema.Schema.Type<TSchema>;
+  readonly bootstrap?: BootstrapFn<
+    Schema.Schema.Type<TSchema>,
+    TBootstrapRow,
+    ReplicaProjectionStorageError
+  >;
+}): DefinedReplicaProjection<TKey, Schema.Schema.Type<TSchema>, any> {
+  type TSnapshot = Schema.Schema.Type<TSchema>;
+
+  class ProjectionTag extends Context.Service<
+    ProjectionTag,
+    IReactiveReplicaProjection<TSnapshot, ReplicaProjectionStorageError, TBootstrapRow>
+  >()(`ReplicaProjection:${options.key}`) {}
+
+  class StoreTag extends Context.Service<
+    StoreTag,
+    IReplicaProjectionStore<TSnapshot, ReplicaProjectionStorageError>
+  >()(`ReplicaProjectionStore:${options.key}`) {}
+
+  const databaseName = projectionDatabaseName(options.key);
+
+  const projectionLayer = IndexedDbReplicaProjection.indexedDbReplicaLayer(ProjectionTag, {
+    databaseName,
+    key: options.key,
+    schema: options.schema,
+    initialValue: options.initialValue,
+    store: StoreTag,
+    bootstrap: options.bootstrap,
+  });
+
+  const atom = (runtime: Atom.AtomRuntime<any, any>) => {
+    const projectionAtom = runtime.atom(
+      Effect.gen(function* () {
+        return yield* ProjectionTag;
+      }),
+    );
+
+    return Atom.transform(projectionAtom, (get, resolvedProjectionAtom) => {
+      const projection = AsyncResult.getOrElse(get(resolvedProjectionAtom), () => undefined);
+      if (!projection) {
+        return options.initialValue;
+      }
+
+      return get(projection.atom);
+    });
+  };
+
+  return {
+    key: options.key,
+    schema: options.schema,
+    initialValue: options.initialValue,
+    databaseName,
+    tag: ProjectionTag,
+    store: StoreTag,
+    projectionLayer,
+    atom,
+  };
+}

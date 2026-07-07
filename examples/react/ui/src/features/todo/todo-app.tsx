@@ -1,5 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type SubmitEvent } from "react";
+import { Effect } from "effect";
+import {
+  makeCompletionSetEvent,
+  makeCreatedEvent,
+  makeDeletedEvent,
+} from "@converge/react-core/todo";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import {
@@ -11,67 +17,38 @@ import {
   CardTitle,
 } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
-import { createTodo, deleteTodo, setTodoCompleted, syncTodos } from "./replica";
-import type {
-  IReactiveReplicaProjection,
-  ReplicaProjectionStorageError,
-} from "converge/projection";
-import type { Type } from "@converge/react-core/todo/model";
+import { todosAtom } from "./replica";
+import { useEventStore } from "./use-event-store";
 
-export function TodoApp({
-  todoProjection,
-}: {
-  readonly todoProjection: IReactiveReplicaProjection<
-    ReadonlyArray<Type>,
-    ReplicaProjectionStorageError
-  >;
-}) {
-  const todos = useAtomValue(todoProjection.atom);
+export function TodoApp() {
+  const todos = useAtomValue(todosAtom);
+  const { commit } = useEventStore();
   const [title, setTitle] = useState("");
-  const [status, setStatus] = useState("Ready");
-  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
 
   const completedCount = todos.filter((todo) => todo.completed).length;
   const openCount = todos.length - completedCount;
 
-  useEffect(() => {
-    const markOnline = () => setIsOnline(true);
-    const markOffline = () => setIsOnline(false);
-
-    window.addEventListener("online", markOnline);
-    window.addEventListener("offline", markOffline);
-
-    void syncTodos()
-      .then(() => setStatus("Sync requested"))
-      .catch((error) => setStatus(String(error)));
-
-    return () => {
-      window.removeEventListener("online", markOnline);
-      window.removeEventListener("offline", markOffline);
-    };
-  }, []);
-
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nextTitle = title.trim();
     if (!nextTitle) return;
 
     setTitle("");
-    setStatus("Saving locally...");
-    await createTodo(nextTitle);
-    setStatus("Saved locally; sync queued");
+    await commit(await Effect.runPromise(makeCreatedEvent({ title: nextTitle })));
   };
 
-  const handleSync = async () => {
-    setStatus("Sync requested...");
-    await syncTodos();
-    setStatus("Sync requested");
+  const handleTodoCompletedChange = async (id: string, completed: boolean) => {
+    await commit(await Effect.runPromise(makeCompletionSetEvent({ id, completed })));
+  };
+
+  const handleTodoDelete = async (id: string) => {
+    await commit(await Effect.runPromise(makeDeletedEvent({ id })));
   };
 
   return (
     <main className="min-h-screen px-4 py-8 text-zinc-950 sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
-        <section className="rounded-[2rem] border border-white/70 bg-white/70 p-6 shadow-xl shadow-zinc-200/70 backdrop-blur sm:p-8">
+        <section className="rounded-4xl border border-white/70 bg-white/70 p-6 shadow-xl shadow-zinc-200/70 backdrop-blur sm:p-8">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-4">
               <Badge variant="outline">Converge example</Badge>
@@ -87,12 +64,6 @@ export function TodoApp({
             </div>
             <div className="grid gap-2 rounded-2xl border border-zinc-200 bg-white p-4 text-sm shadow-sm">
               <div className="flex items-center justify-between gap-6">
-                <span className="text-zinc-500">Network</span>
-                <Badge variant={isOnline ? "default" : "secondary"}>
-                  {isOnline ? "Online" : "Offline"}
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between gap-6">
                 <span className="text-zinc-500">Replica</span>
                 <span className="font-medium">IndexedDB</span>
               </div>
@@ -106,16 +77,11 @@ export function TodoApp({
 
         <Card>
           <CardHeader>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <CardTitle>Todos</CardTitle>
-                <CardDescription>
-                  {openCount} open, {completedCount} completed. {status}.
-                </CardDescription>
-              </div>
-              <Button variant="outline" onClick={handleSync}>
-                Sync now
-              </Button>
+            <div>
+              <CardTitle>Todos</CardTitle>
+              <CardDescription>
+                {openCount} open, {completedCount} completed.
+              </CardDescription>
             </div>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -143,10 +109,7 @@ export function TodoApp({
                       type="checkbox"
                       checked={todo.completed}
                       onChange={(event) => {
-                        setStatus("Saving locally...");
-                        void setTodoCompleted(todo.id, event.target.checked).then(() => {
-                          setStatus("Saved locally; sync queued");
-                        });
+                        void handleTodoCompletedChange(todo.id, event.target.checked);
                       }}
                       className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
                       aria-label={`Mark ${todo.title} complete`}
@@ -164,10 +127,7 @@ export function TodoApp({
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        setStatus("Saving locally...");
-                        void deleteTodo(todo.id).then(() => {
-                          setStatus("Saved locally; sync queued");
-                        });
+                        void handleTodoDelete(todo.id);
                       }}
                     >
                       Delete

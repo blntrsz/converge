@@ -5,7 +5,6 @@ import {
   IndexedDbVersion,
 } from "@effect/platform-browser";
 import { Context, Effect, Layer, Option, Schema } from "effect";
-import { ReplicaApplyContext } from "../../replica-sync-engine/services/apply-context.ts";
 import {
   make,
   type BootstrapFn,
@@ -166,14 +165,18 @@ const makeContext = <
       ReplicaProjectionStorageError
     >;
   },
-  updateContext?: UpdateContext,
+  layerOptions: {
+    readonly resolveReplicaApplyContext?: boolean;
+    readonly updateContext?: UpdateContext;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const storage = yield* indexedDbStorage(options.schema, { key: options.key });
     const runtime = yield* make({
       initialValue: options.initialValue,
       storage,
-      updateContext,
+      updateContext: layerOptions.updateContext,
+      resolveReplicaApplyContext: layerOptions.resolveReplicaApplyContext,
       bootstrap: options.bootstrap,
     });
 
@@ -269,12 +272,9 @@ export function indexedDbReplicaLayer<
 ): Layer.Layer<
   TIdentifier | TStoreIdentifier,
   ReplicaProjectionStorageError | IndexedDbDatabase.IndexedDbDatabaseError,
-  IndexedDb.IndexedDb | ReplicaApplyContext
+  IndexedDb.IndexedDb
 > {
   return Layer.effectContext(
-    Effect.gen(function* () {
-      const updateContext = yield* ReplicaApplyContext;
-      return yield* makeContext(tag, options, updateContext);
-    }),
+    makeContext(tag, options, { resolveReplicaApplyContext: true }),
   ).pipe(Layer.provide(databaseLayer(options.databaseName)));
 }

@@ -119,6 +119,14 @@ export class ReplicaSyncEngineDatabase extends IndexedDbDatabase.make(
 export const databaseLayer = (databaseName = "converge-replica-sync-engine") =>
   ReplicaSyncEngineDatabase.layer(databaseName);
 
+export {
+  browserLayer,
+  defaultReplicaDatabaseName,
+  type BrowserLayerOptions,
+  type BrowserLayerPrimaryOptions,
+  type BrowserLayerResult,
+} from "./browser-replica-sync-engine.ts";
+
 /**
  * The replica event log retains only the latest accepted events globally
  * (ADR 0001). Older events remain on the primary.
@@ -465,6 +473,9 @@ export const layer: Layer.Layer<
     });
 
     yield* recoverPendingTasks;
+
+    const startupTaskId = yield* insertPendingTask({ kind: "reconcile" });
+    yield* Queue.offer(queue, { kind: "reconcile", taskId: startupTaskId });
 
     yield* Effect.logInfo("ReplicaSyncEngine: starting consumer fiber");
 
