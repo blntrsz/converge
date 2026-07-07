@@ -91,13 +91,12 @@ const TestTodoList = () => {
       <button
         type="button"
         onClick={() => {
-          void EventInstance.make(todoCreated, {
-            id: "todo-1",
-            title: "Buy milk",
-            createdAt: 1,
-          }).pipe(
-            Effect.flatMap((event) => Effect.promise(() => commitEvent(event))),
-            Effect.runPromise,
+          void commitEvent(
+            EventInstance.make(todoCreated, {
+              id: "todo-1",
+              title: "Buy milk",
+              createdAt: 1,
+            }),
           );
         }}
       >

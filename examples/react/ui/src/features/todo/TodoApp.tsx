@@ -49,16 +49,11 @@ export function TodoApp() {
 
     setTitle("");
     setStatus("Saving locally...");
-    const todo = await Effect.runPromise(TodoModel.make({ title: nextTitle }));
     await commitEvent(
-      await Effect.runPromise(
-        EventInstance.make(todoCreated, {
-          id: todo.id,
-          title: todo.title,
-          completed: todo.completed,
-          createdAt: todo.createdAt,
-        }),
-      ),
+      Effect.gen(function* () {
+        const todo = yield* TodoModel.make({ title: nextTitle });
+        return yield* EventInstance.make(todoCreated, todo);
+      }),
     );
     setStatus("Saved locally; sync queued");
   };
@@ -136,16 +131,14 @@ export function TodoApp() {
                       checked={todo.completed}
                       onChange={(event) => {
                         setStatus("Saving locally...");
-                        void Effect.runPromise(
+                        void commitEvent(
                           EventInstance.make(todoCompletionSet, {
                             id: todo.id,
                             completed: event.target.checked,
                           }),
-                        )
-                          .then((todoEvent) => commitEvent(todoEvent))
-                          .then(() => {
-                            setStatus("Saved locally; sync queued");
-                          });
+                        ).then(() => {
+                          setStatus("Saved locally; sync queued");
+                        });
                       }}
                       className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
                       aria-label={`Mark ${todo.title} complete`}
@@ -164,11 +157,11 @@ export function TodoApp() {
                       size="sm"
                       onClick={() => {
                         setStatus("Saving locally...");
-                        void Effect.runPromise(EventInstance.make(todoDeleted, { id: todo.id }))
-                          .then((todoEvent) => commitEvent(todoEvent))
-                          .then(() => {
+                        void commitEvent(EventInstance.make(todoDeleted, { id: todo.id })).then(
+                          () => {
                             setStatus("Saved locally; sync queued");
-                          });
+                          },
+                        );
                       }}
                     >
                       Delete

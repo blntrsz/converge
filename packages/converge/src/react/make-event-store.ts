@@ -11,7 +11,15 @@ import { createEventStoreRuntime } from "./event-store-runtime.ts";
  * @since 0.0.0
  * @category model
  */
-export type CommitAtom = Atom.AtomResultFn<EventInstance, void, unknown>;
+export type CommitArg = EventInstance | Effect.Effect<EventInstance, unknown, never>;
+
+/**
+ * @since 0.0.0
+ * @category model
+ */
+export type CommitAtom = Atom.AtomResultFn<CommitArg, void, unknown>;
+
+const resolveCommitArg = (arg: CommitArg) => (Effect.isEffect(arg) ? arg : Effect.succeed(arg));
 
 /**
  * @since 0.0.0
@@ -51,8 +59,11 @@ export const makeEventStore = (config: EventStoreConfig) => {
     indexedDbLayer: config.indexedDbLayer,
   });
 
-  const commit = Atom.fn((event: EventInstance) =>
-    runtime.commit(event).pipe(Effect.asVoid),
+  const commit = Atom.fn((arg: CommitArg) =>
+    resolveCommitArg(arg).pipe(
+      Effect.flatMap((event) => runtime.commit(event)),
+      Effect.asVoid,
+    ),
   );
 
   return {
