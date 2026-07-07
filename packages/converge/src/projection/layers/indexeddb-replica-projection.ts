@@ -23,32 +23,52 @@ const SnapshotRow = Schema.Struct({
 
 type SnapshotRow = typeof SnapshotRow.Type;
 
-const SnapshotTable = IndexedDbTable.make({
-  name: "projection_snapshots",
-  schema: SnapshotRow,
-  keyPath: "key",
-  durability: "strict",
-});
+const DEFAULT_TABLE_NAME = "projection_snapshots";
 
-const ReplicaProjectionDatabaseVersion = IndexedDbVersion.make(SnapshotTable);
+type ProjectionTable = string | { readonly name: string };
+
+const resolveTableName = (table?: ProjectionTable) =>
+  typeof table === "string" ? table : (table?.name ?? DEFAULT_TABLE_NAME);
+
+const projectionDatabaseCache = new Map<string, ReturnType<typeof IndexedDbDatabase.make>>();
+
+const createReplicaProjectionDatabase = (tableName: string) => {
+  const cached = projectionDatabaseCache.get(tableName);
+  if (cached) {
+    return cached;
+  }
+
+  const table = IndexedDbTable.make({
+    name: tableName,
+    schema: SnapshotRow,
+    keyPath: "key",
+    durability: "strict",
+  });
+  const version = IndexedDbVersion.make(table);
+  const database = IndexedDbDatabase.make(
+    version,
+    Effect.fn(function* (api) {
+      yield* api.createObjectStore(tableName);
+    }),
+  );
+  projectionDatabaseCache.set(tableName, database);
+  return database;
+};
 
 /**
  * @since 0.0.0
  * @category database
  */
-export class ReplicaProjectionDatabase extends IndexedDbDatabase.make(
-  ReplicaProjectionDatabaseVersion,
-  Effect.fn(function* (api) {
-    yield* api.createObjectStore("projection_snapshots");
-  }),
-) {}
+export const ReplicaProjectionDatabase = createReplicaProjectionDatabase(DEFAULT_TABLE_NAME);
 
 /**
  * @since 0.0.0
  * @category layer
  */
-export const databaseLayer = (databaseName = "converge-replica-projections") =>
-  ReplicaProjectionDatabase.layer(databaseName);
+export const databaseLayer = (
+  databaseName = "converge-replica-projections",
+  table: ProjectionTable = DEFAULT_TABLE_NAME,
+) => createReplicaProjectionDatabase(resolveTableName(table)).layer(databaseName);
 
 /**
  * @since 0.0.0
@@ -61,6 +81,7 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
   },
   options: {
     readonly key: string;
+    readonly table?: ProjectionTable;
   },
 ): Effect.Effect<
   ReplicaProjectionStorage<Schema.Schema.Type<TSchema>, ReplicaProjectionStorageError>,
@@ -69,10 +90,12 @@ export function indexedDbStorage<const TSchema extends Schema.Schema<any>>(
 > {
   const decodeSnapshot = Schema.decodeUnknownEffect(schema);
   const encodeSnapshot = Schema.encodeUnknownEffect(schema);
+  const tableName = resolveTableName(options.table);
 
   return Effect.gen(function* () {
-    const api = yield* ReplicaProjectionDatabase.getQueryBuilder;
-    const snapshots = api.from("projection_snapshots");
+    const database = createReplicaProjectionDatabase(tableName);
+    const api = yield* database.getQueryBuilder;
+    const snapshots = api.from(tableName);
 
     return {
       load: Effect.gen(function* () {
@@ -151,6 +174,7 @@ const makeContext = <
   >,
   options: {
     readonly key: string;
+    readonly table?: ProjectionTable;
     readonly schema: TSchema & {
       readonly DecodingServices: never;
       readonly EncodingServices: never;
@@ -169,7 +193,10 @@ const makeContext = <
   updateContext?: UpdateContext,
 ) =>
   Effect.gen(function* () {
-    const storage = yield* indexedDbStorage(options.schema, { key: options.key });
+    const storage = yield* indexedDbStorage(options.schema, {
+      key: options.key,
+      table: options.table,
+    });
     const runtime = yield* make({
       initialValue: options.initialValue,
       storage,
@@ -204,6 +231,7 @@ export function indexedDbLayer<
   >,
   options: {
     readonly databaseName?: string;
+    readonly table?: ProjectionTable;
     readonly key: string;
     readonly schema: TSchema & {
       readonly DecodingServices: never;
@@ -226,7 +254,7 @@ export function indexedDbLayer<
   IndexedDb.IndexedDb
 > {
   return Layer.effectContext(makeContext(tag, options)).pipe(
-    Layer.provide(databaseLayer(options.databaseName)),
+    Layer.provide(databaseLayer(options.databaseName, options.table)),
   );
 }
 
@@ -250,6 +278,7 @@ export function indexedDbReplicaLayer<
   >,
   options: {
     readonly databaseName?: string;
+    readonly table?: ProjectionTable;
     readonly key: string;
     readonly schema: TSchema & {
       readonly DecodingServices: never;
@@ -276,5 +305,5 @@ export function indexedDbReplicaLayer<
       const updateContext = yield* ReplicaApplyContext;
       return yield* makeContext(tag, options, updateContext);
     }),
-  ).pipe(Layer.provide(databaseLayer(options.databaseName)));
+  ).pipe(Layer.provide(databaseLayer(options.databaseName, options.table)));
 }

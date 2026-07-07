@@ -66,6 +66,7 @@ export function indexeddbProjection<const TSchema extends Schema.Schema<any>>(op
   };
   readonly initialValue: Schema.Schema.Type<TSchema>;
   readonly databaseName?: string;
+  readonly table?: string | { readonly name: string };
   readonly bootstrap?: BootstrapFn<
     Schema.Schema.Type<TSchema>,
     unknown,
@@ -79,6 +80,7 @@ export function indexeddbProjection<const TSchema extends Schema.Schema<any>>(op
 
   const layer = indexedDbReplicaLayer(tags.Projection, {
     databaseName: options.databaseName,
+    table: options.table,
     key: options.key,
     schema: options.schema,
     initialValue: options.initialValue,
