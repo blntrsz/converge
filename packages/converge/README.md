@@ -59,3 +59,40 @@ const TodoProjectionLayer = IndexedDbReplicaProjection.indexedDbReplicaLayer(Tod
 ```
 
 Use the handlers in `EventRouter.layer`, provide `ReplicaApplyContext.layer` to the replica sync engine, and provide the replica projection layer. Framework adapters can read the projection service; React can subscribe directly with `useAtomValue(projection.atom)`.
+
+## React replica event store
+
+```ts
+import { EventHandler } from "converge/event";
+import { EventStoreProvider, indexeddbProjection, useEventStore } from "converge/react";
+import { useAtomValue } from "@effect/atom-react";
+
+const todoProjection = indexeddbProjection({
+  key: "todos",
+  schema: TodoListSchema,
+  initialValue: [] as ReadonlyArray<Todo>,
+});
+
+const todoCreatedHandler = EventHandler.make(todoCreated, Effect.fn(function* (event) {
+  const store = yield* todoProjection.store;
+  yield* store.update((todos) => [[...todos, event.eventDetails], undefined] as const);
+}));
+
+export const eventStoreConfig = {
+  syncUrl: "/api/sync",
+  handlers: [todoCreatedHandler],
+  projections: [todoProjection],
+};
+
+function TodoList() {
+  const { commit } = useEventStore();
+  const todos = useAtomValue(todoProjection.atom);
+  // commit(await EventInstance.make(todoCreated, details).pipe(Effect.runPromise))
+}
+
+<EventStoreProvider config={eventStoreConfig}>
+  <TodoList />
+</EventStoreProvider>
+```
+
+`EventStoreProvider` activates projections, pokes on mount, and reconciles when the browser comes back online.

@@ -7,7 +7,8 @@
     "./event": "./src/event/index.ts",
     "./primary-sync-engine": "./src/primary-sync-engine/index.ts",
     "./projection": "./src/projection/index.ts",
-    "./replica-sync-engine": "./src/replica-sync-engine/index.ts"
+    "./replica-sync-engine": "./src/replica-sync-engine/index.ts",
+    "./react": "./src/react/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -20,13 +21,30 @@
     "@paralleldrive/cuid2": "catalog:",
     "effect": "catalog:"
   },
-  "devDependencies": {
-    "@effect/vitest": "4.0.0-beta.85",
-    "@types/bun": "latest",
-    "fake-indexeddb": "^6.2.5",
-    "vitest": "^2"
-  },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5",
+    "react": "^19",
+    "@effect/atom-react": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "@effect/atom-react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@effect/atom-react": "catalog:",
+    "@effect/vitest": "4.0.0-beta.85",
+    "@testing-library/react": "^16.3.2",
+    "@types/bun": "latest",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^29.1.1",
+    "react": "^19",
+    "react-dom": "^19",
+    "vitest": "^2"
   }
 }

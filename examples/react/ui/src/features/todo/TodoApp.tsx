@@ -1,4 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
+import { EventInstance } from "converge/event";
+import { useEventStore } from "converge/react";
+import { todoCompletionSet, todoCreated, todoDeleted } from "@converge/react-core/todo";
+import { Effect } from "effect";
 import { useEffect, useState, type FormEvent } from "react";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -11,21 +15,15 @@ import {
   CardTitle,
 } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
-import { createTodo, deleteTodo, setTodoCompleted, syncTodos } from "./replica";
-import type {
-  IReactiveReplicaProjection,
-  ReplicaProjectionStorageError,
-} from "converge/projection";
-import type { Type } from "@converge/react-core/todo/model";
+import { todoProjection } from "./replica";
 
-export function TodoApp({
-  todoProjection,
-}: {
-  readonly todoProjection: IReactiveReplicaProjection<
-    ReadonlyArray<Type>,
-    ReplicaProjectionStorageError
-  >;
-}) {
+const makeTodoId = () =>
+  typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `todo-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+export function TodoApp() {
+  const { commit } = useEventStore();
   const todos = useAtomValue(todoProjection.atom);
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState("Ready");
@@ -41,10 +39,6 @@ export function TodoApp({
     window.addEventListener("online", markOnline);
     window.addEventListener("offline", markOffline);
 
-    void syncTodos()
-      .then(() => setStatus("Sync requested"))
-      .catch((error) => setStatus(String(error)));
-
     return () => {
       window.removeEventListener("online", markOnline);
       window.removeEventListener("offline", markOffline);
@@ -58,14 +52,17 @@ export function TodoApp({
 
     setTitle("");
     setStatus("Saving locally...");
-    await createTodo(nextTitle);
+    await commit(
+      await Effect.runPromise(
+        EventInstance.make(todoCreated, {
+          id: makeTodoId(),
+          title: nextTitle,
+          completed: false,
+          createdAt: new Date().toISOString(),
+        }),
+      ),
+    );
     setStatus("Saved locally; sync queued");
-  };
-
-  const handleSync = async () => {
-    setStatus("Sync requested...");
-    await syncTodos();
-    setStatus("Sync requested");
   };
 
   return (
@@ -113,9 +110,6 @@ export function TodoApp({
                   {openCount} open, {completedCount} completed. {status}.
                 </CardDescription>
               </div>
-              <Button variant="outline" onClick={handleSync}>
-                Sync now
-              </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -144,9 +138,16 @@ export function TodoApp({
                       checked={todo.completed}
                       onChange={(event) => {
                         setStatus("Saving locally...");
-                        void setTodoCompleted(todo.id, event.target.checked).then(() => {
-                          setStatus("Saved locally; sync queued");
-                        });
+                        void Effect.runPromise(
+                          EventInstance.make(todoCompletionSet, {
+                            id: todo.id,
+                            completed: event.target.checked,
+                          }),
+                        )
+                          .then((todoEvent) => commit(todoEvent))
+                          .then(() => {
+                            setStatus("Saved locally; sync queued");
+                          });
                       }}
                       className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
                       aria-label={`Mark ${todo.title} complete`}
@@ -165,9 +166,11 @@ export function TodoApp({
                       size="sm"
                       onClick={() => {
                         setStatus("Saving locally...");
-                        void deleteTodo(todo.id).then(() => {
-                          setStatus("Saved locally; sync queued");
-                        });
+                        void Effect.runPromise(EventInstance.make(todoDeleted, { id: todo.id }))
+                          .then((todoEvent) => commit(todoEvent))
+                          .then(() => {
+                            setStatus("Saved locally; sync queued");
+                          });
                       }}
                     >
                       Delete
