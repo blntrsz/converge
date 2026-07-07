@@ -16,7 +16,7 @@ import type {
   IReactiveReplicaProjection,
   ReplicaProjectionStorageError,
 } from "converge/projection";
-import type { Type } from "@converge/react-core/features/todos";
+import type { Type } from "@converge/react-core/todo/model";
 
 export function TodoApp({
   todoProjection,

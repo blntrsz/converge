@@ -9,8 +9,8 @@ import { StrictMode } from "react";
 import { RegistryProvider } from "@effect/atom-react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import { TodoApp } from "./features/todos/TodoApp";
-import { getTodoProjection } from "./features/todos/replica";
+import { TodoApp } from "./features/todo/TodoApp";
+import { getTodoProjection } from "./features/todo/replica";
 
 const elem = document.getElementById("root")!;
 
