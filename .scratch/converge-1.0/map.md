@@ -18,10 +18,12 @@ A mature Converge 1.0 that adopters can rely on: publishable library with stable
 ## Decisions so far
 
 - [What is the 1.0 product boundary?](issues/01-product-boundary.md) — Library + React integration + reference example ship at 1.0 (different maturity bars). Playwright E2E, real CI/CD, Changesets with RC-on-merge and cut-to-stable, unstable + stable npm channels, and feature flags are all in scope for the 1.0 foundation.
+- [What does "everything works as expected" mean for 1.0?](issues/02-acceptance-criteria.md) — Behavior must match domain model and owner-validated expectations, not just pass today's tests. QA discovery before locking Playwright; stable cut blocked until blocker bugs fixed and core flows reconciled.
 
 ## Not yet specified
 
-- Playwright E2E coverage scope (which flows, which environments)
+- Playwright E2E coverage scope (locked after QA discovery)
+- Bug severity taxonomy and stable-cut blocker bar
 - Feature-flag mechanism and what gets flagged at launch
 - Changesets channel naming, cut-release workflow, and RC promotion rules
 - Test coverage targets beyond E2E; real Postgres vs PgLite for production story
