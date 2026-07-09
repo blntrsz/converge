@@ -25,8 +25,8 @@ One recorded occurrence of an Event, identified by a unique **eventId** (CUID2, 
 _Avoid_: Event record, message instance
 
 **Replica projection**:
-A read-only, queryable view of replica state derived from replica storage. EventHandlers write storage directly; the replica projection reflects that storage. Used to bootstrap a replica from a snapshot so the full event log need not be replayed. After bootstrap, the replica continues syncing from the pinned eventId onward.
-_Avoid_: Read model, cache, write model
+The replica's read surface — a reactive atom over replica storage that also merges in-memory optimistic state for Proposed Events. EventHandlers write storage on accept; the atom reflects persisted snapshot plus any pending optimistic updates. Used to bootstrap from a primary snapshot so the full event log need not be replayed. After bootstrap, the replica continues syncing from the pinned eventId onward.
+_Avoid_: Read model, visible projection, cache, write model
 
 **Event history id**:
 The monotonic `event_history.id` assigned when the primary accepts an EventInstance. Defines acceptance order in the event log. Resolved from an eventId on the primary; not used as a wire reference.
@@ -37,7 +37,7 @@ The eventId shared across all projections on a replica. Marks where incremental 
 _Avoid_: Per-projection cursor, eventHistoryId as wire id
 
 **Sync mode**:
-How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic overlay is disabled. Returning to Latest re-bootstraps all projections to head, re-seeds `event_history` at the sync position eventId, and resumes normal sync.
+How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic updates are disabled. Returning to Latest re-bootstraps all projections to head, re-seeds `event_history` at the sync position eventId, and resumes normal sync.
 _Avoid_: Live mode, replay mode, follow mode
 
 **Primary storage**:
@@ -61,24 +61,20 @@ The primary's accept or reject decision on a pushed EventInstance. On the wire: 
 _Avoid_: Validation result, success/failure, admission
 
 **Accepted**:
-A verdict where the primary stored the EventInstance. The replica persists it to the replica event log, runs the handler to write storage, and clears the in-memory optimistic overlay for that event.
+A verdict where the primary stored the EventInstance. The replica persists it to the replica event log, runs the handler to write storage, and clears the optimistic update for that event from the replica projection atom.
 _Avoid_: Committed, succeeded
 
 **Rejected**:
-A verdict where the primary refused the EventInstance. The replica clears the in-memory optimistic overlay for that event without writing storage.
+A verdict where the primary refused the EventInstance. The replica clears the optimistic update for that event from the replica projection atom without writing storage.
 _Avoid_: Failed, denied
 
-**Optimistic overlay**:
-An in-memory layer on the replica that holds tentative state for Proposed Events. On push, pure reduce functions (shared with replica handlers) apply events to the overlay snapshot. A composed view merges the read-only projection with this overlay for UI. Never persisted; discarded on accept (after storage write) or reject.
-_Avoid_: Pending state, draft projection, optimistic cache
+**Optimistic update**:
+In-memory tentative state for a Proposed Event, held inside the replica projection atom. On push, pure reduce functions (shared with replica handlers) apply the event optimistically. Never persisted; discarded on accept (after storage write) or reject.
+_Avoid_: Optimistic overlay, pending state, draft projection
 
 **Reduce function**:
-A pure function `apply(snapshot, event) → snapshot` encoding how one EventInstance updates projection state. Shared by primary handlers (via versioned storage writes), replica handlers (flat storage on accept), and the optimistic overlay (on push). The unit of handler equivalence.
+A pure function `apply(snapshot, event) → snapshot` encoding how one EventInstance updates projection state. Shared by primary handlers (via versioned storage writes), replica handlers (flat storage on accept), and optimistic updates (on push). The unit of handler equivalence.
 _Avoid_: Reducer, projector, event applier
-
-**Visible projection**:
-The merged read surface for UI: read-only projection over committed storage plus the optimistic overlay. Exposed as a composed reactive atom.
-_Avoid_: Live query, merged read model, display projection
 
 **Proposed Event**:
 An EventInstance the replica has applied optimistically but the primary has not yet accepted or rejected. Stored locally until the verdict arrives.

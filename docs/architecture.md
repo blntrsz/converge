@@ -23,7 +23,7 @@ Converge is an Effect-based library for offline-first, event-sourced application
 │                                                                 │
 │  Replica event log (capped) ◄── accepted events from pull       │
 │  Replica handlers ──► Replica storage (flat)                    │
-│  Replica projections (reactive atom = storage + optimistic)   │
+│  Replica projections (atom = storage + optimistic updates)    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
