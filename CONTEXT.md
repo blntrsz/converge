@@ -117,8 +117,8 @@ An EventHandler that runs on the replica, writing replica storage (e.g. IndexedD
 _Avoid_: Client handler, frontend handler
 
 **Handler equivalence**:
-Primary and replica handlers are separate implementations with different storage shapes (versioned vs flat), but the same event sequence must produce the same projection snapshot on both sides. Handlers must be idempotent — re-applying an event already reflected in storage is a no-op.
-_Avoid_: Shared handler, identical handler
+Primary and replica handlers are separate implementations with different storage shapes (versioned vs flat), but the same event sequence must produce the same projection snapshot on both sides. Handlers must be idempotent — re-applying an event already reflected in storage is a no-op. The library does not enforce equivalence; applications own it via shared reduce functions and tests.
+_Avoid_: Shared handler, identical handler, library-enforced equivalence
 
 A replica hosts one or more replica projections. All replica projections share one replica event log and one sync position eventId.
 
