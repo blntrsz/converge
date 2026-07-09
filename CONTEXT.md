@@ -37,8 +37,8 @@ The eventId shared across all projections on a replica. Marks where incremental 
 _Avoid_: Per-projection cursor, eventHistoryId as wire id
 
 **Sync mode**:
-How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic overlay is disabled. Returning to Latest re-bootstraps all projections to head, re-seeds event*history at the sync position eventId, and resumes normal sync.
-\_Avoid*: Live mode, replay mode, follow mode
+How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic overlay is disabled. Returning to Latest re-bootstraps all projections to head, re-seeds `event_history` at the sync position eventId, and resumes normal sync.
+_Avoid_: Live mode, replay mode, follow mode
 
 **Primary storage**:
 Versioned record storage on the primary. Each handler accept appends a new row with a `since` sequence. Bootstrap reads are anchored queries over this history.
@@ -57,7 +57,7 @@ The replica's local `event_history` of accepted EventInstances. Retains only the
 _Avoid_: Event store, full history, archive
 
 **Verdict**:
-The primary's accept or reject decision on a pushed EventInstance.
+The primary's accept or reject decision on a pushed EventInstance. On the wire: `{ ok: true }` is accepted, `{ ok: false }` is rejected.
 _Avoid_: Validation result, success/failure, admission
 
 **Accepted**:
@@ -85,11 +85,11 @@ An EventInstance the replica has applied optimistically but the primary has not 
 _Avoid_: Pending event, draft event, uncommitted event
 
 **Push**:
-Replica originates an EventInstance — applies it optimistically in memory, stores it as a Proposed Event, and forwards it to the primary for verdict. Storage is not written until the event is accepted.
+Replica originates an EventInstance — applies it optimistically in memory, stores it as a Proposed Event, and enqueues a forward task to send it to the primary for verdict. Storage is not written until the event is accepted. Returns immediately after optimistic apply.
 _Avoid_: Submit, send, publish
 
 **Poke**:
-Replica requests reconcile — pulls accepted events from the primary since the last known position and applies them locally. On the first poke, bootstraps if not yet initialized.
+Replica requests reconcile — enqueues a reconcile task that pulls accepted events from the primary since the last known position and applies them locally. On the first poke, bootstraps if not yet initialized. Returns immediately; pull happens in the background consumer.
 _Avoid_: Sync, refresh, pull
 
 **Repair**:
@@ -101,11 +101,11 @@ A read-only projection on the primary, derived from primary storage updated by p
 _Avoid_: Server read model, materialized view, cache
 
 **Bootstrap**:
-Hydrating a replica's projections from primary flat snapshots at the sync engine's active version sequence. Triggered on the first `poke`, when checking out an older version sequence, or when returning from Checkout to Latest. Each projection is fetched separately: `GET /bootstrap/{projectionKey}?eventId=<eventId>`. Seeds `event_history` with the EventInstance at the sync position eventId so pull can resume from `lastEventId()` — handlers are not re-run for the seeded event; the imported snapshot already reflects it.
+Hydrating a replica's projections from primary flat snapshots at the sync engine's active version sequence. Triggered on the first `poke`, when checking out an older version sequence, or when returning from Checkout to Latest. Each projection is fetched separately: `GET /projection/{projectionKey}?eventId=<eventId>`. Seeds `event_history` with the EventInstance at the sync position eventId so pull can resume from `lastEventId()` — handlers are not re-run for the seeded event; the imported snapshot already reflects it.
 _Avoid_: Initial sync, full replay, migration
 
 **Versioned projection**:
-Primary storage keeps every version of each record keyed by `since` sequence. Bootstrap encodes a flat snapshot per projection at a sync position eventId: `GET /bootstrap/{projectionKey}?eventId=<eventId>`. The primary resolves eventId to an event history id, queries `since ≤ sequence`, and returns a materialized snapshot for replica storage. New events between fetches do not affect a pinned read.
+Primary storage keeps every version of each record keyed by `since` sequence. Bootstrap encodes a flat snapshot per projection at a sync position eventId: `GET /projection/{projectionKey}?eventId=<eventId>`. The primary resolves eventId to an event history id, queries `since ≤ sequence`, and returns a materialized snapshot for replica storage. New events between fetches do not affect a pinned read.
 _Avoid_: Point-in-time read, historical snapshot
 
 **Event log**:
@@ -125,3 +125,21 @@ Primary and replica handlers are separate implementations with different storage
 _Avoid_: Shared handler, identical handler
 
 A replica hosts one or more replica projections. All replica projections share one replica event log and one sync position eventId.
+
+## Sync engine
+
+**Forward task**:
+A persisted background task enqueued by `push`. Flushes all Proposed Events to the primary, applies verdicts locally, then pulls accepted events since the cursor held before the flush.
+_Avoid_: Push callback, sync job, upload task
+
+**Reconcile task**:
+A persisted background task enqueued by `poke` or the periodic poll. Bootstraps at primary head if the replica has no event history yet, then pulls all accepted events since the last known position.
+_Avoid_: Pull task, refresh job, sync-all
+
+**Pending task**:
+A durable row in replica storage (`pending_tasks`) representing work for the background consumer. Survives page reload.
+_Avoid_: Job queue entry, sync queue item
+
+**Pull cursor**:
+The eventId query parameter on `GET /pull?cursor=`. Marks where paginated pull resumes — the last eventId the replica had applied when starting that pull. Distinct from sync position (which anchors bootstrap).
+_Avoid_: Sync position, event history id, offset
