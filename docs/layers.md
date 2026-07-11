@@ -2,7 +2,7 @@
 
 Converge integrates exclusively through Effect `Layer` wiring. See [ADR 0008](./adr/0008-effect-layers-as-public-api.md).
 
-## Primary (server)
+## Primary
 
 Minimal stack from `examples/react/api`:
 
@@ -48,7 +48,7 @@ const { layer, runtime, atom } = IndexedDbReplicaSyncEngine.browserLayer({
 });
 ```
 
-`browserLayer` wires IndexedDB replica storage, HTTP primary client, projection router, event router, and background sync consumer. Subscribe to `atom` for UI state.
+`browserLayer` wires IndexedDB replica storage, HTTP primary sync engine layer, projection router, event router, and background sync consumer. Subscribe to `atom` for UI state.
 
 ## Tests
 

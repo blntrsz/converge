@@ -2,7 +2,7 @@
 
 The replica sync engine operates in two modes controlled by the client. **Latest** tracks the primary head — bootstrap and pull use the current version sequence, and the engine incrementally syncs new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap fetches flat projection snapshots materialized at that sequence, and the engine does not advance until the client returns to Latest or checks out a different sequence.
 
-The client picks the active sequence; there is no dedicated sync-position negotiation endpoint. Bootstrap requests pass the sync position as `eventId` on the wire; the primary resolves it to an event history id. Primary storage remains fully versioned by `since` sequence; replicas materialize flat snapshots only at the chosen sequence.
+The replica picks the active sequence; there is no dedicated sync-position negotiation endpoint. Bootstrap requests pass the sync position as `eventId` on the wire; the primary resolves it to an event history id. Primary storage remains fully versioned by `since` sequence; replicas materialize flat snapshots only at the chosen sequence.
 
 **Considered options:** dedicated sync-position negotiation endpoint (rejected — couples bootstrap to server-driven head), per-projection sync positions (rejected — risks inconsistent replay across projections), replica-side version history (rejected — too much data on the frontend).
 
