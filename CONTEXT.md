@@ -41,8 +41,8 @@ How the replica sync engine positions itself against the primary. **Latest** tra
 _Avoid_: Live mode, replay mode, follow mode
 
 **Primary storage**:
-Versioned record storage on the primary. Each handler accept appends a new row with a `since` sequence. Bootstrap reads are anchored queries over this history.
-_Avoid_: Write model, source table
+Versioned record storage on the primary — required for all Converge apps. Each handler accept appends a new row with a `since` sequence (the accepting event's event history id). Bootstrap reads are anchored queries over this history. Flat tables without version history are not supported.
+_Avoid_: Write model, source table, flat primary table
 
 **Version sequence**:
 The monotonic position of an accepted EventInstance in the event log. Primary storage records are versioned with a `since` sequence; an anchored bootstrap read returns the latest record version per entity where `since` ≤ anchor sequence.

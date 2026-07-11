@@ -51,7 +51,7 @@ All integration is via Effect `Layer` composition.
 
 Primary and replica handlers are separate implementations wired through `EventRouter`. They must produce the same projection snapshot for the same event sequence — but the library does not enforce this. Applications own equivalence via shared reduce functions (see `examples/react/core`) and their own tests.
 
-Replica handlers receive an apply phase (`optimistic`, `accepted`, `rejected`) via `ReplicaApplyContext`. Primary handlers write versioned storage; replica handlers write flat storage on accept only.
+Primary handlers write versioned storage (append rows with `since` — required). Replica handlers write flat storage on accept only. Replica handlers receive an apply phase (`optimistic`, `accepted`, `rejected`) via `ReplicaApplyContext`.
 
 ## Further reading
 
