@@ -58,7 +58,7 @@ export function TodoApp() {
                 </h1>
                 <p className="max-w-2xl text-base leading-7 text-zinc-600">
                   Writes land in the browser replica immediately, then forward to the Bun primary
-                  engine in the background. Reconcile pulls accepted events back from the server.
+                  in the background. Reconcile pulls accepted events back from the primary.
                 </p>
               </div>
             </div>

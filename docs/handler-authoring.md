@@ -10,7 +10,7 @@ import { Event } from "converge/event";
 export const todoCreated = Event.make("todo.created.v1", TodoModel.fields);
 ```
 
-Event type strings are versioned (`todo.created.v1`). Payload schemas live in shared application code (`examples/react/core`).
+Event names are versioned (`todo.created.v1`). Payload schemas live in shared application code (`examples/react/core`).
 
 ## 2. Write reduce functions
 
@@ -79,7 +79,7 @@ Handlers typically call the same reduce in all phases. The projection store rout
 EventRouter.layer({ handlers: [createdHandler, ...] })
 ```
 
-Register the same Event types on both primary and replica, with separate handler implementations.
+Register the same Events on both primary and replica, with separate handler implementations.
 
 ## 6. Idempotency
 

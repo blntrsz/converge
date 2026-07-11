@@ -25,7 +25,7 @@ export class EventHandler<
 }
 
 /**
- * A handler for one specific Event type, with the Event type intentionally erased.
+ * A handler for one specific Event, with the Event intentionally erased.
  *
  * @since 0.0.0
  * @category type

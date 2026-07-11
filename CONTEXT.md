@@ -97,7 +97,7 @@ A read-only projection on the primary, derived from primary storage updated by p
 _Avoid_: Server read model, materialized view, cache
 
 **Bootstrap**:
-Hydrating a replica's projections from primary flat snapshots at the sync engine's active version sequence. Triggered on the first `poke`, when checking out an older version sequence, or when returning from Checkout to Latest. Each projection is fetched separately: `GET /projection/{projectionKey}?eventId=<eventId>`. Seeds `event_history` with the EventInstance at the sync position eventId so pull can resume from `lastEventId()` — handlers are not re-run for the seeded event; the imported snapshot already reflects it.
+Hydrating a replica's projections from primary flat snapshots at the sync engine's active version sequence. Triggered on replica cold start (the background consumer enqueues an initial reconcile), on `poke` or periodic poll, when checking out an older version sequence, or when returning from Checkout to Latest. Each projection is fetched separately: `GET /projection/{projectionKey}?eventId=<eventId>`. Seeds `event_history` with the EventInstance at the sync position eventId so pull can resume from `lastEventId()` — handlers are not re-run for the seeded event; the imported snapshot already reflects it.
 _Avoid_: Initial sync, full replay, migration
 
 **Versioned projection**:

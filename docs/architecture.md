@@ -42,8 +42,8 @@ All integration is via Effect `Layer` composition.
 
 1. **Cold start** — consumer recovers persisted `pending_tasks`, enqueues an initial reconcile, starts polling.
 2. **Push** — handler runs optimistically; event stored in `proposed_events`; a `forward` task is enqueued. Returns before primary verdict.
-3. **Forward task** — flush proposed events to primary; on accept apply locally and append to replica event log; on reject run handler in rejected phase; pull events since cursor before flush.
-4. **Poke / poll** — enqueue `reconcile` task. Reconcile bootstraps at head if uninitialized, then pulls all events since last known position.
+3. **Forward task** — flush proposed events to primary; on accept apply locally and append to replica event log; on reject run handler in rejected phase; pull events since cursor held before flush.
+4. **Poke / poll** — enqueue `reconcile` task. Reconcile also flushes proposed events, bootstraps at head if uninitialized, then pulls all events since last known position.
 5. **Checkout** — pin to a version sequence; push and poke are no-ops; projections bootstrap at the pinned eventId.
 6. **Repair** — re-bootstrap all projections at the active sync mode sequence. Triggered explicitly or automatically when a consumer task fails.
 

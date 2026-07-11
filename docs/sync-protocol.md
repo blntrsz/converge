@@ -1,6 +1,6 @@
 # Sync protocol
 
-HTTP routes exposed by `converge/primary-sync-engine` (`httpPrimarySyncEngineRoutes`). Mount at a base path (e.g. `/api/sync` in the React example).
+HTTP routes exposed by `converge/primary-sync-engine` (`HttpPrimarySyncEngine.routesLayer`). Mount at a base path (e.g. `/api/sync` in the React example).
 
 All wire events use this shape:
 
@@ -28,7 +28,7 @@ Response (last page):
 { "data": [ /* WireEvent[] */ ], "hasNext": false }
 ```
 
-Events are ordered by primary `event_history.id`. The cursor is always an eventId, resolved server-side to an event history id.
+Events are ordered by primary `event_history.id`. The cursor is always an eventId, resolved on the primary to an event history id.
 
 ## `POST /push`
 
@@ -70,6 +70,6 @@ Bootstrap stream for a primary projection at a version sequence.
 
 Response: `application/x-ndjson` — one JSON object per line, encoded by the projection's bootstrap schema.
 
-## Client usage
+## Replica usage
 
-The replica sync engine's `PrimarySyncEngine` client wraps these endpoints. Replicas never call them directly from application code — use `ReplicaSyncEngine.push`, `poke`, `checkout`, `setLatest`, and `repair`.
+The replica sync engine's HTTP `PrimarySyncEngine` layer wraps these endpoints. Application code on replicas never calls them directly — use `ReplicaSyncEngine.push`, `poke`, `checkout`, `setLatest`, and `repair`.

@@ -31,8 +31,9 @@ export interface IReplicaSyncEngine {
    * Runs the local event handler optimistically and enqueues a remote forward.
    *
    * Returns once the optimistic projection update is complete. The remote
-   * verdict happens in a background consumer. The local `event_history` append
-   * happens later when the accepted event is pulled from the primary.
+   * verdict happens in a background consumer. On accept, the forward task
+   * appends to `event_history` immediately; events accepted elsewhere are
+   * appended when pulled.
    *
    * @since 0.0.0
    * @category service-method-interface
