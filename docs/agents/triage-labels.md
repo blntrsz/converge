@@ -12,4 +12,4 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
-`ready-for-agent` and `wontfix` already exist on GitHub. The other three labels will be created on first use by `/triage`.
+Create missing labels in Linear with `issueLabelCreate` on first use by `/triage`.

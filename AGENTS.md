@@ -10,7 +10,7 @@ You can explore dependencies that is added as git submodules in .agents/. (e.g. 
 
 ### Issue tracker
 
-GitHub Issues on `blntrsz/converge` via `gh`; external PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
+Linear — **Converge** project via GraphQL API (`LINEAR_API_KEY`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
