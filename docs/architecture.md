@@ -55,6 +55,7 @@ Primary handlers write versioned storage (append rows with `since` — required)
 
 ## Further reading
 
+- [Handler authoring](./handler-authoring.md) — primary/replica handlers, reduces, apply phases
 - [Layer composition](./layers.md) — Effect Layer wiring cookbook
 - [Sync protocol](./sync-protocol.md) — HTTP wire API
 - [ADRs](./adr/) — architectural decisions
