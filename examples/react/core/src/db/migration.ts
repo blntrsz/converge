@@ -7,14 +7,17 @@ const todoMigrations = Migrator.fromRecord({
   "2_create_todo": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
-    yield* sql`DROP TABLE IF EXISTS todos`;
+    yield* sql`DROP TABLE IF EXISTS todo`;
 
     yield* sql`
       CREATE TABLE IF NOT EXISTS todo (
-        id text PRIMARY KEY,
+        id text NOT NULL,
         title text NOT NULL,
         completed boolean NOT NULL DEFAULT false,
-        created_at text NOT NULL
+        "createdAt" text NOT NULL,
+        since bigint NOT NULL,
+        deleted boolean NOT NULL DEFAULT false,
+        PRIMARY KEY (id, since)
       )
     `;
   }),
