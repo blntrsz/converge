@@ -8,8 +8,16 @@ A library for building offline-first, event-sourced applications with primary/re
 An Effect-based library that composes event storage, sync engines, and projections into offline-first applications.
 _Avoid_: Framework, platform
 
+**Tenant**:
+The customer data-isolation boundary in a multi-tenant application. Each tenant is exactly one sync domain, and a replica belongs to exactly one tenant.
+_Avoid_: Account, organization, workspace
+
+**Sync domain**:
+The tenant-scoped event history and projections that a set of replicas converge against. A deployed primary runtime may host many sync domains, but their histories and replica positions never mix.
+_Avoid_: Namespace, channel, room
+
 **Primary**:
-The authoritative node that owns the event log and decides which events are accepted. One primary per sync domain.
+The authoritative side of a sync domain that owns its event log and decides which events are accepted. One logical primary per sync domain; a deployed primary runtime may host many tenant-scoped primaries.
 _Avoid_: Server, backend, leader
 
 **Replica**:
@@ -33,11 +41,11 @@ The monotonic `event_history.id` assigned when the primary accepts an EventInsta
 _Avoid_: eventId, sync anchor, cursor, checkpoint, offset
 
 **Sync position**:
-The eventId shared across all projections on a replica. Marks where incremental event-log sync begins after bootstrap. One per replica. Always an eventId — the primary resolves it to an event history id for versioned reads.
+The eventId shared across all projections on a tenant-bound replica. Marks where incremental event-log sync begins after bootstrap. One per replica. Always an eventId — the primary resolves it to an event history id for versioned reads.
 _Avoid_: Per-projection cursor, eventHistoryId as wire id
 
 **Sync mode**:
-How the replica sync engine positions itself against the primary. **Latest** tracks the primary head and incrementally pulls new accepted events. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, poke is a no-op, optimistic updates are disabled. Returning to Latest re-bootstraps all projections to head, re-seeds `event_history` at the sync position eventId, and resumes normal sync.
+How the replica sync engine positions itself against the primary. **Latest** tracks the primary head through the Event history stream. **Checkout** pins a specific version sequence for time travel — bootstrap and reads reflect that sequence until the mode changes. Checkout is read-only: no push, no Event history stream, and optimistic updates are disabled. Returning to Latest re-bootstraps all projections to head, re-seeds `event_history` at the sync position eventId, and resumes the stream.
 _Avoid_: Live mode, replay mode, follow mode
 
 **Primary storage**:
@@ -84,20 +92,20 @@ _Avoid_: Pending event, draft event, uncommitted event
 Replica originates an EventInstance — applies it optimistically in memory, stores it as a Proposed Event, and enqueues a forward task to send it to the primary for verdict. Storage is not written until the event is accepted. Returns immediately after optimistic apply.
 _Avoid_: Submit, send, publish
 
-**Poke**:
-Replica requests reconcile — enqueues a reconcile task that pulls accepted events from the primary since the last known position and applies them locally. On the first poke, bootstraps if not yet initialized. Returns immediately; pull happens in the background consumer.
-_Avoid_: Sync, refresh, pull
+**Event history stream**:
+The ordered, replayable feed of accepted EventInstances from one tenant's primary to a replica bound to that tenant. It resumes after a sync position eventId, catches up through history, and then continues with new events; delivery is at-least-once.
+_Avoid_: Poke, pull, live feed
 
 **Repair**:
-Recovery from a broken event chain (missing or out-of-order accepted events). Sync halts, then re-bootstraps all projections at the active sync mode's sequence and resumes. No partial repair.
+Recovery from a broken event chain (missing or out-of-order accepted events). Sync halts, then re-bootstraps all projections at the active sync mode's sequence and resumes the Event history stream. No partial repair.
 _Avoid_: Resync, heal, rebuild
 
 **Primary projection**:
-A read-only projection on the primary, derived from primary storage updated by primary handlers. Replicas pull its snapshot on cold start to bootstrap local state without replaying history.
+A read-only projection on the primary, derived from primary storage updated by primary handlers. Replicas fetch its snapshot on cold start to bootstrap local state without replaying history.
 _Avoid_: Server read model, materialized view, cache
 
 **Bootstrap**:
-Hydrating a replica's projections from primary flat snapshots at the sync engine's active version sequence. Triggered on replica cold start (the background consumer enqueues an initial reconcile), on `poke` or periodic poll, when checking out an older version sequence, or when returning from Checkout to Latest. Each projection is fetched separately: `GET /projection/{projectionKey}?eventId=<eventId>`. Seeds `event_history` with the EventInstance at the sync position eventId so pull can resume from `lastEventId()` — handlers are not re-run for the seeded event; the imported snapshot already reflects it.
+Hydrating a replica's projections from primary flat snapshots at the sync engine's active version sequence. Triggered before the Event history stream starts on an uninitialized replica, when checking out an older version sequence, or when returning from Checkout to Latest. Each projection is fetched separately: `GET /projection/{projectionKey}?eventId=<eventId>`. Seeds `event_history` with the EventInstance at the sync position eventId so the stream can resume after it — handlers are not re-run for the seeded event; the imported snapshot already reflects it.
 _Avoid_: Initial sync, full replay, migration
 
 **Versioned projection**:
@@ -105,7 +113,7 @@ Primary storage keeps every version of each record keyed by `since` sequence. Bo
 _Avoid_: Point-in-time read, historical snapshot
 
 **Event log**:
-The primary's append-only store of accepted EventInstances. The source of truth; projections and replicas are derived from it.
+The tenant-scoped primary append-only store of accepted EventInstances. The source of truth for its sync domain; projections and replicas are derived from it.
 _Avoid_: Event store, database, table
 
 **Primary handler**:
@@ -125,17 +133,9 @@ A replica hosts one or more replica projections. All replica projections share o
 ## Sync engine
 
 **Forward task**:
-A persisted background task enqueued by `push`. Flushes all Proposed Events to the primary, applies verdicts locally, then pulls accepted events since the cursor held before the flush.
+A persisted background task enqueued by `push`. Forwards Proposed Events to the primary for verdict so offline pushes survive page reload.
 _Avoid_: Push callback, sync job, upload task
-
-**Reconcile task**:
-A persisted background task enqueued by `poke` or the periodic poll. Bootstraps at primary head if the replica has no event history yet, then pulls all accepted events since the last known position.
-_Avoid_: Pull task, refresh job, sync-all
 
 **Pending task**:
 A durable row in replica storage (`pending_tasks`) representing work for the background consumer. Survives page reload.
 _Avoid_: Job queue entry, sync queue item
-
-**Pull cursor**:
-The eventId query parameter on `GET /pull?cursor=`. Marks where paginated pull resumes — the last eventId the replica had applied when starting that pull. Distinct from sync position (which anchors bootstrap).
-_Avoid_: Sync position, event history id, offset
